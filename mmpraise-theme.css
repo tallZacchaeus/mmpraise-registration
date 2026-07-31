@@ -1,0 +1,146 @@
+/* MMPraise design tokens — extracted from https://mmpraise.org (live computed styles)
+   Use these for the MMP Registration UI so it matches the main site. */
+
+@import url('https://fonts.googleapis.com/css2?family=Afacad:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&display=swap');
+
+:root {
+  /* Brand */
+  --mmp-orange:        #F34402; /* primary CTA / accent  rgb(243,68,2) */
+  --mmp-orange-bright: #FF6210; /* secondary accent      rgb(255,98,16) */
+  --mmp-orange-soft:   #FEA06E; /* muted accent text     rgb(254,160,110) */
+  --mmp-peach:         #FFD3C2; /* soft fill             rgb(255,211,194) */
+  --mmp-cream:         #FEF1E4; /* section tint (astra secondary) */
+  --mmp-cream-30:      rgba(255, 240, 235, 0.3); /* light section wash */
+  --mmp-sand:          #E5D7D1; /* subtle border / divider */
+
+  /* Neutrals */
+  --mmp-ink:        #1C0D0A; /* headings on light  rgb(28,13,10) */
+  --mmp-body:       #353535; /* body copy          rgb(53,53,53) */
+  --mmp-black:      #000000; /* dark sections */
+  --mmp-near-black: #140B06; /* alternate dark bg */
+  --mmp-charcoal:   #23282D;
+  --mmp-white:      #FFFFFF;
+  --mmp-overlay:    rgba(0, 0, 0, 0.48); /* hero image overlay */
+
+  /* Typography */
+  --mmp-font-display: 'Afacad', sans-serif;  /* headings + buttons, UPPERCASE */
+  --mmp-font-body:    'Figtree', sans-serif; /* body copy */
+
+  --mmp-h1: 700 44px/1.2 var(--mmp-font-display);  /* letter-spacing .1px, uppercase */
+  --mmp-h2: 700 38px/1.2 var(--mmp-font-display);  /* letter-spacing .1px, uppercase */
+  --mmp-h3: 700 26px/1   var(--mmp-font-display);  /* letter-spacing -1px, uppercase */
+  --mmp-eyebrow: 700 22px/1 var(--mmp-font-display); /* pill labels, uppercase */
+  --mmp-sub: 500 24px/1 var(--mmp-font-display);   /* hero subhead, ls .5px, uppercase */
+  --mmp-body-text: 400 16px/1.4 var(--mmp-font-body);
+
+  /* Shape */
+  --mmp-radius-pill: 30px;   /* all buttons are fully pill-shaped */
+  --mmp-radius-card: 12px;
+  --mmp-btn-padding: 20px 40px;
+  --mmp-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);
+  --mmp-section-pad: 70px 0 100px;
+}
+
+/* Headings: Afacad, bold, uppercase, tight leading */
+.mmp-h1, .mmp-h2, .mmp-h3 {
+  font-family: var(--mmp-font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--mmp-ink);
+}
+.mmp-h1 { font-size: 44px; line-height: 1.2; letter-spacing: .1px; }
+.mmp-h2 { font-size: 38px; line-height: 1.2; letter-spacing: .1px; }
+.mmp-h3 { font-size: 26px; line-height: 1;   letter-spacing: -1px; }
+.on-dark { color: var(--mmp-white); }
+
+body {
+  font: var(--mmp-body-text);
+  color: var(--mmp-body);
+  background: var(--mmp-white);
+}
+
+/* Buttons — pill, uppercase Afacad 700, generous padding */
+.mmp-btn {
+  display: inline-block;
+  font-family: var(--mmp-font-display);
+  font-weight: 700;
+  font-size: 15px;
+  text-transform: uppercase;
+  text-decoration: none;
+  padding: var(--mmp-btn-padding);
+  border-radius: var(--mmp-radius-pill);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color .2s ease, color .2s ease, border-color .2s ease;
+}
+.mmp-btn--primary { background: var(--mmp-orange); color: var(--mmp-white); }
+.mmp-btn--primary:hover { background: var(--mmp-orange-bright); }
+/* Outline on dark (the "GIVE" style) */
+.mmp-btn--ghost-dark { background: transparent; color: var(--mmp-white); border-color: var(--mmp-white); }
+.mmp-btn--ghost-dark:hover { background: var(--mmp-white); color: var(--mmp-ink); }
+/* Outline on light (the "READ MORE" style) */
+.mmp-btn--ghost-light { background: transparent; color: var(--mmp-ink); border-color: var(--mmp-ink); }
+.mmp-btn--ghost-light:hover { background: var(--mmp-ink); color: var(--mmp-white); }
+
+/* Eyebrow pill label used above section headings (e.g. "Testimonies") */
+.mmp-eyebrow {
+  display: inline-block;
+  background: var(--mmp-orange);
+  color: var(--mmp-white);
+  font: var(--mmp-eyebrow);
+  text-transform: uppercase;
+  padding: 10px 24px;
+  border-radius: var(--mmp-radius-pill);
+}
+
+/* Sections */
+.mmp-section        { padding: var(--mmp-section-pad); }
+.mmp-section--light { background: var(--mmp-white); }
+.mmp-section--tint  { background: var(--mmp-cream-30); }
+.mmp-section--dark  { background: var(--mmp-black); color: var(--mmp-white); }
+
+/* Hero: photo + dark overlay, white uppercase display type */
+.mmp-hero {
+  position: relative;
+  background-size: cover;
+  background-position: center;
+  color: var(--mmp-white);
+}
+.mmp-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--mmp-overlay);
+}
+.mmp-hero > * { position: relative; }
+
+/* Cards */
+.mmp-card {
+  background: var(--mmp-white);
+  border: 1px solid var(--mmp-sand);
+  border-radius: var(--mmp-radius-card);
+  box-shadow: var(--mmp-shadow);
+  padding: 32px;
+}
+
+/* Forms */
+.mmp-input {
+  width: 100%;
+  font: var(--mmp-body-text);
+  color: var(--mmp-body);
+  background: var(--mmp-white);
+  border: 1px solid var(--mmp-sand);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.mmp-input:focus {
+  outline: none;
+  border-color: var(--mmp-orange);
+  box-shadow: 0 0 0 3px rgba(243, 68, 2, 0.15);
+}
+.mmp-label {
+  font-family: var(--mmp-font-body);
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--mmp-ink);
+}

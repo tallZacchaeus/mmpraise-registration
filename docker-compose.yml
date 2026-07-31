@@ -1,0 +1,131 @@
+# MMPraise Volunteer Registration — production stack for a single VPS.
+#
+#   cp .env.example .env.production   # then fill it in — see docs/GO-LIVE.md
+#   docker compose --env-file .env.production build
+#   docker compose --env-file .env.production up -d
+#
+# `--env-file` is not optional. Compose substitutes ${VAR} from `.env` by
+# default, so without it every NEXT_PUBLIC_* build argument below resolves to an
+# empty string and the browser bundle ships with no site URL and every feature
+# flag at its default.
+#
+# There is no database service here: the connection string in .env.production
+# points at your managed PostgreSQL. If you would rather run Postgres on this
+# same box, uncomment the `db` service at the bottom.
+
+services:
+  # One-shot: applies any migrations that are not yet in the database, then
+  # exits. `app` will not start until this succeeds, so the server never runs
+  # against a schema the code does not match. `migrate deploy` only replays
+  # migrations that are already reviewed and committed — it never generates or
+  # resets anything, so it is safe on every boot.
+  #
+  # Seed the database once, after the first deploy:
+  #   docker compose --env-file .env.production run --rm migrate npx tsx prisma/seed.ts
+  migrate:
+    build:
+      context: .
+      target: build
+    env_file: .env.production
+    command: npx prisma migrate deploy
+    restart: 'no'
+
+  app:
+    build:
+      context: .
+      # NEXT_PUBLIC_* values are compiled into the browser bundle, so they must
+      # be known at build time, not just at run time. `--env-file
+      # .env.production` supplies them here; `env_file` below supplies the
+      # server-side ones at run time. One file, both stages.
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+        NEXT_PUBLIC_EVENT_EDITION: ${NEXT_PUBLIC_EVENT_EDITION}
+        NEXT_PUBLIC_EVENT_DURATION_HOURS: ${NEXT_PUBLIC_EVENT_DURATION_HOURS}
+        NEXT_PUBLIC_EVENT_STARTS_AT: ${NEXT_PUBLIC_EVENT_STARTS_AT}
+        NEXT_PUBLIC_EVENT_VENUE: ${NEXT_PUBLIC_EVENT_VENUE}
+        NEXT_PUBLIC_EVENT_VENUE_ADDRESS: ${NEXT_PUBLIC_EVENT_VENUE_ADDRESS}
+        NEXT_PUBLIC_CONTACT_EMAIL: ${NEXT_PUBLIC_CONTACT_EMAIL}
+        NEXT_PUBLIC_CONTACT_PHONE: ${NEXT_PUBLIC_CONTACT_PHONE}
+        NEXT_PUBLIC_CONTACT_ADDRESS: ${NEXT_PUBLIC_CONTACT_ADDRESS}
+        NEXT_PUBLIC_FACEBOOK_URL: ${NEXT_PUBLIC_FACEBOOK_URL}
+        NEXT_PUBLIC_INSTAGRAM_URL: ${NEXT_PUBLIC_INSTAGRAM_URL}
+        NEXT_PUBLIC_X_URL: ${NEXT_PUBLIC_X_URL}
+        NEXT_PUBLIC_TIKTOK_URL: ${NEXT_PUBLIC_TIKTOK_URL}
+        NEXT_PUBLIC_FEATURE_GIVE: ${NEXT_PUBLIC_FEATURE_GIVE}
+        NEXT_PUBLIC_FEATURE_ABOUT: ${NEXT_PUBLIC_FEATURE_ABOUT}
+        NEXT_PUBLIC_FEATURE_BLOG: ${NEXT_PUBLIC_FEATURE_BLOG}
+        NEXT_PUBLIC_FEATURE_GALLERY: ${NEXT_PUBLIC_FEATURE_GALLERY}
+        NEXT_PUBLIC_FEATURE_MAGAZINE: ${NEXT_PUBLIC_FEATURE_MAGAZINE}
+        NEXT_PUBLIC_FEATURE_RADIO: ${NEXT_PUBLIC_FEATURE_RADIO}
+        NEXT_PUBLIC_FEATURE_PRAYER_REQUEST: ${NEXT_PUBLIC_FEATURE_PRAYER_REQUEST}
+        NEXT_PUBLIC_FEATURE_CONTACT: ${NEXT_PUBLIC_FEATURE_CONTACT}
+        NEXT_PUBLIC_FEATURE_LIVESTREAM: ${NEXT_PUBLIC_FEATURE_LIVESTREAM}
+        NEXT_PUBLIC_FEATURE_SHARE_TESTIMONY: ${NEXT_PUBLIC_FEATURE_SHARE_TESTIMONY}
+        NEXT_PUBLIC_FEATURE_NEWSLETTER: ${NEXT_PUBLIC_FEATURE_NEWSLETTER}
+    env_file: .env.production
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # Not published to the host: only Caddy may reach the app, so the port
+    # cannot be hit directly on the VPS's public IP, bypassing TLS.
+    expose:
+      - '3000'
+    volumes:
+      # Only used if STORAGE_DRIVER=local. With STORAGE_DRIVER=s3 it stays empty
+      # but costs nothing, and it keeps development mail output somewhere real.
+      - uploads:/app/storage
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '5' }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Used by the Caddyfile to request the certificate for the right name.
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.production}
+    depends_on:
+      - app
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '5' }
+
+  # Uncomment only if you are not using a managed database. If you do, point
+  # DATABASE_URL at postgresql://mmp:PASSWORD@db:5432/mmp_registration and take
+  # responsibility for backups yourself — see docs/DEPLOYMENT.md.
+  #
+  # db:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_DB: mmp_registration
+  #     POSTGRES_USER: mmp
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ['CMD-SHELL', 'pg_isready -U mmp -d mmp_registration']
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+volumes:
+  uploads:
+  caddy_data:
+  caddy_config:
+  # pgdata:

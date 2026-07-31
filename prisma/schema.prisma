@@ -1,0 +1,824 @@
+// MMPraise Volunteer Registration — data model
+//
+// Design notes:
+//  * Fields that are filtered, sorted or reported on live in typed columns
+//    (fast, indexable, constrained). Only department-specific questions use the
+//    dynamic question engine (DepartmentQuestion/ApplicationAnswer), so admins can
+//    add questions without a deploy while core reporting stays fast.
+//  * Health information is isolated in ApplicationHealthInfo so it can never be
+//    accidentally included in a volunteer list query.
+//  * Uploaded files are referenced by opaque ids; the storage key is never exposed.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  VOLUNTEER
+  SUPER_ADMIN
+  REGISTRATION_ADMIN
+  DEPARTMENT_HEAD
+  REVIEWER
+  MEDICAL_INFO_OFFICER
+  COMMUNICATION_OFFICER
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum AgeRange {
+  AGE_00_15
+  AGE_16_20
+  AGE_21_25
+  AGE_26_30
+  AGE_31_35
+  AGE_36_40
+  AGE_41_45
+  AGE_46_50
+  AGE_51_PLUS
+}
+
+enum Denomination {
+  RCCG
+  OTHER_CHRISTIAN
+  NON_CHRISTIAN
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  WAITLISTED
+  REJECTED
+  ASSIGNED
+  CHECKED_IN
+  COMPLETED
+}
+
+enum QuestionType {
+  TEXT
+  TEXTAREA
+  EMAIL
+  TEL
+  NUMBER
+  DATE
+  RADIO
+  CHECKBOX
+  SELECT
+  MULTISELECT
+  FILE
+  RATING
+}
+
+enum DocumentKind {
+  PROFILE_PHOTO
+  CERTIFICATE
+  ANSWER_ATTACHMENT
+}
+
+enum TokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+enum ShiftPeriod {
+  MORNING
+  AFTERNOON
+  EVENING
+  OVERNIGHT
+}
+
+enum LookupCategory {
+  OCCUPATION
+  EDUCATION
+  DISCOVERY_SOURCE
+}
+
+enum SubmissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AnnouncementAudience {
+  ALL_VOLUNTEERS
+  DEPARTMENT
+  APPROVED_ONLY
+}
+
+// ---------------------------------------------------------------------------
+// Identity & access
+// ---------------------------------------------------------------------------
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  username        String    @unique
+  phone           String?   @unique
+  passwordHash    String
+  emailVerifiedAt DateTime?
+  isActive        Boolean   @default(true)
+  lastLoginAt     DateTime?
+  failedLogins    Int       @default(0)
+  lockedUntil     DateTime?
+  deletionRequestedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  roles            UserRole[]
+  departmentScopes UserDepartmentScope[]
+  sessions         Session[]
+  tokens           VerificationToken[]
+  profile          VolunteerProfile?
+  applications     VolunteerApplication[]
+  documents        VolunteerDocument[]
+  auditLogs        AuditLog[]              @relation("AuditActor")
+  notesAuthored    AdminNote[]
+  statusChanges    ApplicationStatusHistory[] @relation("StatusChangedBy")
+  announcements    Announcement[]
+  testimoniesReviewed TestimonySubmission[] @relation("TestimonyReviewer")
+
+  @@index([createdAt])
+  @@map("users")
+}
+
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  role   Role
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+  @@map("user_roles")
+}
+
+/// Restricts a DEPARTMENT_HEAD (or reviewer) to specific departments.
+model UserDepartmentScope {
+  id           String     @id @default(cuid())
+  userId       String
+  departmentId String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, departmentId])
+  @@map("user_department_scopes")
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  ip        String?
+  userAgent String?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  type      TokenType
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("verification_tokens")
+}
+
+/// Database-backed fixed-window rate limiting (no Redis dependency required).
+model RateLimitBucket {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  count       Int      @default(0)
+  windowStart DateTime @default(now())
+  expiresAt   DateTime
+
+  @@index([expiresAt])
+  @@map("rate_limit_buckets")
+}
+
+// ---------------------------------------------------------------------------
+// Reference data — geography
+// ---------------------------------------------------------------------------
+
+model Country {
+  id        String  @id @default(cuid())
+  iso2      String  @unique
+  iso3      String  @unique
+  name      String
+  phoneCode String
+  emoji     String?
+  hasStates Boolean @default(true)
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  states   State[]
+  profiles VolunteerProfile[]
+
+  @@index([name])
+  @@map("countries")
+}
+
+model State {
+  id        String  @id @default(cuid())
+  countryId String
+  name      String
+  code      String?
+  isActive  Boolean @default(true)
+  country   Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  profiles VolunteerProfile[]
+
+  @@unique([countryId, name])
+  @@index([countryId])
+  @@map("states")
+}
+
+// ---------------------------------------------------------------------------
+// Reference data — church hierarchy (RCCG)
+// ---------------------------------------------------------------------------
+
+model ChurchContinent {
+  id        String  @id @default(cuid())
+  name      String  @unique
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+  regions   ChurchRegion[]
+
+  @@map("church_continents")
+}
+
+model ChurchRegion {
+  id          String  @id @default(cuid())
+  continentId String?
+  name        String  @unique
+  code        String?
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+
+  continent ChurchContinent?  @relation(fields: [continentId], references: [id], onDelete: SetNull)
+  provinces ChurchProvince[]
+  profiles  VolunteerProfile[]
+
+  @@index([continentId])
+  @@map("church_regions")
+}
+
+model ChurchProvince {
+  id        String  @id @default(cuid())
+  regionId  String
+  name      String
+  code      String?
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  region   ChurchRegion       @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  zones    ChurchZone[]
+  parishes Parish[]
+  profiles VolunteerProfile[]
+
+  @@unique([regionId, name])
+  @@index([regionId])
+  @@map("church_provinces")
+}
+
+model ChurchZone {
+  id         String  @id @default(cuid())
+  provinceId String
+  name       String
+  isActive   Boolean @default(true)
+  sortOrder  Int     @default(0)
+
+  province ChurchProvince @relation(fields: [provinceId], references: [id], onDelete: Cascade)
+  areas    ChurchArea[]
+
+  @@unique([provinceId, name])
+  @@map("church_zones")
+}
+
+model ChurchArea {
+  id        String  @id @default(cuid())
+  zoneId    String
+  name      String
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  zone     ChurchZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  parishes Parish[]
+
+  @@unique([zoneId, name])
+  @@map("church_areas")
+}
+
+model Parish {
+  id         String  @id @default(cuid())
+  provinceId String?
+  areaId     String?
+  name       String
+  address    String?
+  isActive   Boolean @default(true)
+
+  province ChurchProvince?    @relation(fields: [provinceId], references: [id], onDelete: SetNull)
+  area     ChurchArea?        @relation(fields: [areaId], references: [id], onDelete: SetNull)
+  profiles VolunteerProfile[]
+
+  @@index([provinceId])
+  @@index([name])
+  @@map("parishes")
+}
+
+/// Admin-manageable option lists (occupation, education, discovery source) so the
+/// values can change without a code deploy.
+model LookupOption {
+  id           String         @id @default(cuid())
+  category     LookupCategory
+  value        String
+  label        String
+  requiresText Boolean        @default(false)
+  isActive     Boolean        @default(true)
+  sortOrder    Int            @default(0)
+
+  @@unique([category, value])
+  @@index([category, isActive])
+  @@map("lookup_options")
+}
+
+// ---------------------------------------------------------------------------
+// Departments & the dynamic question engine
+// ---------------------------------------------------------------------------
+
+model Department {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+  capacity    Int?
+  isActive    Boolean @default(true)
+  sortOrder   Int     @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  questions     DepartmentQuestion[]
+  applications  VolunteerApplication[]
+  scopes        UserDepartmentScope[]
+  shifts        Shift[]
+  announcements Announcement[]
+
+  @@map("departments")
+}
+
+model DepartmentQuestion {
+  id           String       @id @default(cuid())
+  departmentId String
+  key          String
+  label        String
+  helpText     String?
+  type         QuestionType
+  isRequired   Boolean      @default(false)
+  isActive     Boolean      @default(true)
+  sortOrder    Int          @default(0)
+
+  // Type-specific constraints, all optional.
+  maxLength        Int?
+  minValue         Int?
+  maxValue         Int?
+  ratingMin        Int?
+  ratingMax        Int?
+  allowedMimeTypes String[] @default([])
+  maxFileSizeKb    Int?
+  placeholder      String?
+  /// Optional regular expression applied to text answers (e.g. URL formats),
+  /// enforced on both client and server.
+  pattern        String?
+  patternMessage String?
+
+  // Conditional display: show only when the parent question's answer includes
+  // one of parentOptionValues (or, for booleans, equals parentValue).
+  parentQuestionId   String?
+  parentOptionValues String[] @default([])
+
+  department Department           @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  parent     DepartmentQuestion?  @relation("QuestionConditional", fields: [parentQuestionId], references: [id], onDelete: Cascade)
+  children   DepartmentQuestion[] @relation("QuestionConditional")
+  options    QuestionOption[]
+  answers    ApplicationAnswer[]
+
+  @@unique([departmentId, key])
+  @@index([departmentId, isActive])
+  @@map("department_questions")
+}
+
+model QuestionOption {
+  id           String  @id @default(cuid())
+  questionId   String
+  value        String
+  label        String
+  /// "Other" style options that reveal a free-text input.
+  requiresText Boolean @default(false)
+  isActive     Boolean @default(true)
+  sortOrder    Int     @default(0)
+
+  question DepartmentQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answers  ApplicationAnswerOption[]
+
+  @@unique([questionId, value])
+  @@map("question_options")
+}
+
+// ---------------------------------------------------------------------------
+// Volunteer profile & application
+// ---------------------------------------------------------------------------
+
+model VolunteerProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  firstName String
+  lastName  String
+  gender    Gender?
+  ageRange  AgeRange?
+  phone     String?
+  phoneCountry String?
+
+  // Guardian consent, required when the applicant is a minor.
+  // AGE_16_20 straddles the age of majority, so minors are recorded explicitly
+  // rather than inferred from the age band alone.
+  isMinor         Boolean?
+  guardianName    String?
+  guardianPhone   String?
+  guardianConsent Boolean @default(false)
+
+  // Location
+  countryId      String?
+  stateId        String?
+  stateNameOther String?
+  city           String?
+  addressLine    String?
+
+  // Professional / educational
+  occupation      String?
+  occupationOther String?
+  education       String?
+  educationOther  String?
+
+  // Church
+  denomination     Denomination?
+  churchRegionId   String?
+  churchProvinceId String?
+  parishId         String?
+  parishNameOther  String?
+  churchName       String?
+
+  photoDocumentId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  country  Country?          @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  state    State?            @relation(fields: [stateId], references: [id], onDelete: SetNull)
+  region   ChurchRegion?     @relation(fields: [churchRegionId], references: [id], onDelete: SetNull)
+  province ChurchProvince?   @relation(fields: [churchProvinceId], references: [id], onDelete: SetNull)
+  parish   Parish?           @relation(fields: [parishId], references: [id], onDelete: SetNull)
+  photo    VolunteerDocument? @relation("ProfilePhoto", fields: [photoDocumentId], references: [id], onDelete: SetNull)
+
+  @@index([lastName, firstName])
+  @@index([countryId, stateId])
+  @@map("volunteer_profiles")
+}
+
+model VolunteerApplication {
+  id             String            @id @default(cuid())
+  registrationId String            @unique
+  userId         String
+  departmentId   String?
+  status         ApplicationStatus @default(DRAFT)
+  currentStep    Int               @default(1)
+
+  /// Autosaved wizard state for an in-progress draft. Cleared on submission.
+  draftData Json?
+
+  // Step 7 — discovery & motivation
+  discoverySource String?
+  discoveryOther  String?
+  whyVolunteer    String?
+  skillsExperience String?
+  additionalInfo   String?
+
+  // Step 6 — availability summary
+  availableOvernight Boolean?
+
+  // Step 9 — consents (each stored with the time it was given)
+  consentAccurate       Boolean   @default(false)
+  consentTerms          Boolean   @default(false)
+  consentDataProcessing Boolean   @default(false)
+  consentCommunication  Boolean   @default(false)
+  consentedAt           DateTime?
+
+  submittedAt    DateTime?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  decisionReason String?
+
+  submissionIp        String?
+  submissionUserAgent String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  department    Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  answers       ApplicationAnswer[]
+  availability  VolunteerAvailability[]
+  emergency     EmergencyContact?
+  health        ApplicationHealthInfo?
+  documents     VolunteerDocument[]
+  statusHistory ApplicationStatusHistory[]
+  notes         AdminNote[]
+  assignments   ShiftAssignment[]
+
+  @@index([status])
+  @@index([departmentId, status])
+  @@index([submittedAt])
+  @@map("volunteer_applications")
+}
+
+model ApplicationAnswer {
+  id            String @id @default(cuid())
+  applicationId String
+  questionId    String
+
+  valueText   String?
+  valueNumber Decimal? @db.Decimal(12, 2)
+  valueBool   Boolean?
+  valueDate   DateTime?
+  documentId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  application VolunteerApplication     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  question    DepartmentQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  document    VolunteerDocument?       @relation("AnswerDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  options     ApplicationAnswerOption[]
+
+  @@unique([applicationId, questionId])
+  @@index([questionId])
+  @@map("application_answers")
+}
+
+model ApplicationAnswerOption {
+  id        String  @id @default(cuid())
+  answerId  String
+  optionId  String
+  /// Free text captured when the chosen option requiresText (e.g. "Other").
+  otherText String?
+
+  answer ApplicationAnswer @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  option QuestionOption    @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@unique([answerId, optionId])
+  @@map("application_answer_options")
+}
+
+model VolunteerAvailability {
+  id            String      @id @default(cuid())
+  applicationId String
+  date          DateTime    @db.Date
+  period        ShiftPeriod
+  note          String?
+
+  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId, date, period])
+  @@map("volunteer_availability")
+}
+
+model EmergencyContact {
+  id            String @id @default(cuid())
+  applicationId String @unique
+  name          String
+  relationship  String
+  phone         String
+  altPhone      String?
+
+  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@map("emergency_contacts")
+}
+
+/// Restricted health information. Separate table so ordinary volunteer queries
+/// cannot return it, and access is gated on the MEDICAL_INFO_OFFICER role.
+model ApplicationHealthInfo {
+  id            String   @id @default(cuid())
+  applicationId String   @unique
+  hasCondition  Boolean  @default(false)
+  details       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@map("application_health_info")
+}
+
+model VolunteerDocument {
+  id            String       @id @default(cuid())
+  userId        String
+  applicationId String?
+  kind          DocumentKind
+  storageKey    String       @unique
+  originalName  String
+  mimeType      String
+  sizeBytes     Int
+  checksum      String?
+  width         Int?
+  height        Int?
+  createdAt     DateTime     @default(now())
+
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  application VolunteerApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+  profilePhotoOf VolunteerProfile?  @relation("ProfilePhoto")
+  answers     ApplicationAnswer[]   @relation("AnswerDocument")
+
+  @@index([userId])
+  @@map("volunteer_documents")
+}
+
+model ApplicationStatusHistory {
+  id            String            @id @default(cuid())
+  applicationId String
+  fromStatus    ApplicationStatus?
+  toStatus      ApplicationStatus
+  changedById   String?
+  reason        String?
+  createdAt     DateTime          @default(now())
+
+  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  changedBy   User?                @relation("StatusChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+  @@map("application_status_history")
+}
+
+model AdminNote {
+  id            String   @id @default(cuid())
+  applicationId String
+  authorId      String?
+  body          String
+  createdAt     DateTime @default(now())
+
+  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  author      User?                @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([applicationId, createdAt])
+  @@map("admin_notes")
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling & communication
+// ---------------------------------------------------------------------------
+
+model Shift {
+  id           String      @id @default(cuid())
+  departmentId String?
+  name         String
+  startsAt     DateTime
+  endsAt       DateTime
+  location     String?
+  capacity     Int?
+  period       ShiftPeriod
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+
+  department  Department?       @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  assignments ShiftAssignment[]
+
+  @@index([startsAt])
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  id            String   @id @default(cuid())
+  shiftId       String
+  applicationId String
+  assignedById  String?
+  createdAt     DateTime @default(now())
+
+  shift       Shift                @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@unique([shiftId, applicationId])
+  @@map("shift_assignments")
+}
+
+model Announcement {
+  id           String               @id @default(cuid())
+  title        String
+  body         String
+  audience     AnnouncementAudience @default(ALL_VOLUNTEERS)
+  departmentId String?
+  publishedAt  DateTime?
+  createdById  String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  createdBy  User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([publishedAt])
+  @@map("announcements")
+}
+
+// ---------------------------------------------------------------------------
+// Platform
+// ---------------------------------------------------------------------------
+
+/// Public testimony submissions from the homepage.
+/// Nothing here is shown publicly until an administrator approves it.
+model TestimonySubmission {
+  id          String           @id @default(cuid())
+  title       String?
+  body        String
+  authorName  String
+  email       String
+  phone       String?
+  country     String
+  isAnonymous Boolean          @default(false)
+  consentToPublish Boolean     @default(false)
+  status      SubmissionStatus @default(PENDING)
+  reviewedById String?
+  reviewedAt  DateTime?
+  reviewNote  String?
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  reviewedBy User? @relation("TestimonyReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("testimony_submissions")
+}
+
+/// Email addresses collected by the "stay updated" form.
+model NewsletterSubscriber {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  consentGiven   Boolean   @default(false)
+  confirmedAt    DateTime?
+  unsubscribedAt DateTime?
+  source         String    @default("homepage")
+  ip             String?
+  createdAt      DateTime  @default(now())
+
+  @@index([createdAt])
+  @@map("newsletter_subscribers")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}

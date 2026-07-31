@@ -1,0 +1,43 @@
+# TLS termination and reverse proxy for the MMPraise app.
+#
+# Caddy obtains and renews a Let's Encrypt certificate on its own, so there is
+# no certbot to schedule and nothing to remember to renew. Point the domain's
+# A/AAAA records at this VPS before starting it, or the ACME challenge fails.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# Uploads are capped at MAX_UPLOAD_MB (5 by default). 12 MB leaves room for
+	# multipart overhead and for raising that limit without editing this file.
+	request_body {
+		max_size 12MB
+	}
+
+	header {
+		# The app is HTTPS-only in production; tell browsers to remember that.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		# Do not advertise the server software.
+		-Server
+	}
+
+	reverse_proxy app:3000 {
+		# Next.js reads these to build absolute URLs and to know the request was
+		# secure; without them redirects would come back as http://.
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}

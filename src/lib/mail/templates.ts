@@ -1,0 +1,166 @@
+import { env } from '@/lib/env'
+import type { MailMessage } from './mailer'
+
+/**
+ * Email templates.
+ *
+ * Plain, table-free HTML with inline styles — the most reliable thing across
+ * Gmail, Outlook and mobile clients. Every template also ships a text part.
+ *
+ * Privacy rule enforced here: no template ever includes health information,
+ * emergency-contact details or any other restricted field.
+ */
+
+const BRAND = '#d63a02'
+const INK = '#1c0d0a'
+const BODY = '#353535'
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function layout(heading: string, bodyHtml: string): string {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(heading)}</title></head>
+<body style="margin:0;padding:24px;background:#faf7f5;font-family:Helvetica,Arial,sans-serif;color:${BODY};line-height:1.6;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5d7d1;border-radius:14px;overflow:hidden;">
+    <div style="background:${INK};padding:20px 28px;">
+      <span style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;">MMPraise Volunteers</span>
+    </div>
+    <div style="padding:28px;">
+      <h1 style="margin:0 0 16px;font-size:22px;line-height:1.25;color:${INK};text-transform:uppercase;">${escapeHtml(heading)}</h1>
+      ${bodyHtml}
+    </div>
+    <div style="padding:18px 28px;border-top:1px solid #e5d7d1;font-size:13px;color:#5a5a5a;">
+      Need help? Contact <a href="mailto:${env.SUPPORT_EMAIL}" style="color:${BRAND};">${env.SUPPORT_EMAIL}</a>.<br>
+      ${escapeHtml(env.APP_NAME)}
+    </div>
+  </div>
+</body></html>`
+}
+
+function button(href: string, label: string): string {
+  return `<p style="margin:24px 0;">
+    <a href="${href}" style="display:inline-block;background:${BRAND};color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:999px;font-weight:700;text-transform:uppercase;font-size:14px;">${escapeHtml(label)}</a>
+  </p>
+  <p style="font-size:13px;color:#5a5a5a;word-break:break-all;">If the button does not work, copy this link into your browser:<br>${href}</p>`
+}
+
+export function verificationEmail(params: { name: string; url: string }): MailMessage {
+  const html = layout(
+    'Confirm your email address',
+    `<p>Hello ${escapeHtml(params.name)},</p>
+     <p>Thank you for starting your MMPraise volunteer registration. Please confirm your email address so we can keep you updated about your application.</p>
+     ${button(params.url, 'Confirm email address')}
+     <p style="font-size:13px;color:#5a5a5a;">This link expires in 24 hours. If you did not create this account you can safely ignore this message.</p>`,
+  )
+  return {
+    to: '',
+    subject: 'Confirm your MMPraise volunteer email address',
+    html,
+    text: `Hello ${params.name},\n\nConfirm your email address to continue your MMPraise volunteer registration:\n${params.url}\n\nThis link expires in 24 hours.`,
+  }
+}
+
+export function passwordResetEmail(params: { name: string; url: string }): MailMessage {
+  const html = layout(
+    'Reset your password',
+    `<p>Hello ${escapeHtml(params.name)},</p>
+     <p>We received a request to reset the password for your MMPraise volunteer account.</p>
+     ${button(params.url, 'Reset password')}
+     <p style="font-size:13px;color:#5a5a5a;">This link expires in 60 minutes and can be used once. If you did not request a reset, no action is needed — your password has not changed.</p>`,
+  )
+  return {
+    to: '',
+    subject: 'Reset your MMPraise volunteer password',
+    html,
+    text: `Hello ${params.name},\n\nReset your MMPraise volunteer password:\n${params.url}\n\nThis link expires in 60 minutes. If you did not request it, ignore this email.`,
+  }
+}
+
+export function submissionEmail(params: {
+  name: string
+  registrationId: string
+  department: string
+  submittedAt: string
+  loginUrl: string
+}): MailMessage {
+  const rows = [
+    ['Name', params.name],
+    ['Registration ID', params.registrationId],
+    ['Department', params.department],
+    ['Date submitted', params.submittedAt],
+  ]
+    .map(
+      ([label, value]) =>
+        `<tr><td style="padding:8px 0;color:#5a5a5a;font-size:14px;">${escapeHtml(label)}</td>
+             <td style="padding:8px 0;color:${INK};font-weight:600;font-size:14px;text-align:right;">${escapeHtml(value)}</td></tr>`,
+    )
+    .join('')
+
+  const html = layout(
+    'Registration received',
+    `<p>Hello ${escapeHtml(params.name)},</p>
+     <p>Your volunteer registration has been received. Please keep your registration ID for reference.</p>
+     <table style="width:100%;border-collapse:collapse;border-top:1px solid #e5d7d1;border-bottom:1px solid #e5d7d1;margin:16px 0;">${rows}</table>
+     <h2 style="font-size:16px;color:${INK};text-transform:uppercase;margin:24px 0 8px;">What happens next</h2>
+     <ol style="padding-left:18px;margin:0 0 16px;">
+       <li>Our team reviews your application against your chosen department.</li>
+       <li>You will receive an email when your status changes.</li>
+       <li>If you are approved, we will send shift details and briefing information.</li>
+     </ol>
+     ${button(params.loginUrl, 'View your volunteer profile')}`,
+  )
+
+  return {
+    to: '',
+    subject: `MMPraise volunteer registration received — ${params.registrationId}`,
+    html,
+    text: `Hello ${params.name},\n\nYour MMPraise volunteer registration has been received.\n\nRegistration ID: ${params.registrationId}\nDepartment: ${params.department}\nSubmitted: ${params.submittedAt}\n\nWhat happens next:\n1. Our team reviews your application.\n2. You will be emailed when your status changes.\n3. Approved volunteers receive shift details and briefing information.\n\nView your profile: ${params.loginUrl}`,
+  }
+}
+
+export function statusChangeEmail(params: {
+  name: string
+  registrationId: string
+  status: string
+  department: string
+  message?: string | null
+  loginUrl: string
+}): MailMessage {
+  const html = layout(
+    'Your application status has changed',
+    `<p>Hello ${escapeHtml(params.name)},</p>
+     <p>The status of your volunteer application <strong>${escapeHtml(params.registrationId)}</strong> (${escapeHtml(params.department)}) is now:</p>
+     <p style="font-size:20px;font-weight:700;color:${INK};text-transform:uppercase;margin:12px 0;">${escapeHtml(params.status)}</p>
+     ${params.message ? `<p style="background:#fff1ea;border:1px solid #ffd3c2;border-radius:10px;padding:12px 16px;">${escapeHtml(params.message)}</p>` : ''}
+     ${button(params.loginUrl, 'Open your dashboard')}`,
+  )
+  return {
+    to: '',
+    subject: `MMPraise volunteer application ${params.registrationId} — ${params.status}`,
+    html,
+    text: `Hello ${params.name},\n\nYour application ${params.registrationId} (${params.department}) is now: ${params.status}.\n${params.message ? `\n${params.message}\n` : ''}\nOpen your dashboard: ${params.loginUrl}`,
+  }
+}
+
+export function announcementEmail(params: { name: string; title: string; body: string; loginUrl: string }): MailMessage {
+  const paragraphs = params.body
+    .split(/\n{2,}/)
+    .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
+    .join('')
+
+  const html = layout(params.title, `<p>Hello ${escapeHtml(params.name)},</p>${paragraphs}${button(params.loginUrl, 'Open your dashboard')}`)
+  return {
+    to: '',
+    subject: `MMPraise volunteers — ${params.title}`,
+    html,
+    text: `Hello ${params.name},\n\n${params.body}\n\nOpen your dashboard: ${params.loginUrl}`,
+  }
+}
