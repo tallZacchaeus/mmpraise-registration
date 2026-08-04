@@ -78,7 +78,8 @@ export default async function AuditPage({
             <EmptyState title="No audit entries" description="Actions will appear here as administrators use the system." />
           </CardBody>
         ) : (
-          <div className="overflow-x-auto">
+          /* `relative` so the scroll box clips its absolute (sr-only) descendants. */
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[48rem] border-collapse text-left text-sm">
               <caption className="sr-only">Audit log entries</caption>
               <thead>

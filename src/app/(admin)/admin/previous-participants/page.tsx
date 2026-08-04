@@ -97,7 +97,7 @@ export default async function PreviousParticipantsPage() {
              * label. Horizontal scroll inside the card keeps the page itself
              * from overflowing.
              */
-            <div className="overflow-x-auto">
+            <div className="relative overflow-x-auto">
               <table className="w-full min-w-[52rem] border-collapse text-sm">
                 <caption className="sr-only">
                   Previous-edition imports, newest first, with row counts and status.

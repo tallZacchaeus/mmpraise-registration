@@ -32,6 +32,18 @@ export const PERMISSIONS = [
   'user:manage',
   'audit:view',
 
+  /*
+   * Testimony moderation. Contact details are a separate grant from the
+   * moderation itself: reading somebody's story is the job, reading their
+   * phone number is only needed when replying — and a public-submission inbox
+   * is exactly where minimal exposure matters.
+   */
+  'testimony:moderate',
+  'testimony:contact_view',
+
+  /** The public contact inbox — triage, assignment, notes, resolution. */
+  'contact:manage',
+
   // Previous-edition migration. Deliberately separate from the general admin
   // permissions: an import reads thousands of people's personal details and
   // can email all of them, so it is granted explicitly, never by default.
@@ -65,6 +77,9 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'reference:manage',
     'settings:manage',
     'audit:view',
+    'testimony:moderate',
+    'testimony:contact_view',
+    'contact:manage',
     // View only. Creating, running and emailing a migration are granted
     // explicitly to the people who do that work.
     'migration:view',
@@ -94,6 +109,9 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'volunteer:message',
     'announcement:manage',
     'application:export',
+    'testimony:moderate',
+    'testimony:contact_view',
+    'contact:manage',
   ],
 }
 

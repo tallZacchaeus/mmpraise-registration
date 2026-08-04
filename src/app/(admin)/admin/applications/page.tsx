@@ -85,8 +85,16 @@ export default async function ApplicationsPage({
         </Card>
       ) : (
         <Card className="overflow-hidden">
-          {/* Horizontal scroll is confined to the table so the page never scrolls sideways. */}
-          <div className="overflow-x-auto">
+          {/*
+            Horizontal scroll is confined to the table so the page never scrolls
+            sideways. `relative` is load-bearing: the sr-only annotations in the
+            table (`position: absolute`) are only clipped by this scroll box if
+            it is their containing block. Without it, a "waiting more than a
+            week" note sitting ~785px into the table widened the document and
+            made phone browsers zoom the whole page out — the same escape the
+            admin nav's headings had.
+          */}
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[52rem] border-collapse text-left text-sm">
               <caption className="sr-only">
                 Volunteer applications, page {result.page} of {result.pages}

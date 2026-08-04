@@ -287,7 +287,7 @@ export async function getAnalytics(user: SessionUser) {
     }),
   ])
 
-  const departments = await db.department.findMany({ select: { id: true, name: true, capacity: true } })
+  const departments = await db.department.findMany({ select: { id: true, name: true } })
   const countries = await db.country.findMany({
     where: { id: { in: byCountry.map((c) => c.countryId).filter((id): id is string => Boolean(id)) } },
     select: { id: true, name: true },

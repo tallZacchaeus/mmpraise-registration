@@ -48,22 +48,36 @@ test.describe('bulk approval', () => {
     await expect(row.getByText(/waiting more than a week/i)).toBeAttached()
   })
 
-  test('approves everything in the filtered view, with a counted confirmation', async ({
-    page,
-    isMobile,
-  }) => {
+  test('has no horizontal overflow at any supported width', async ({ page }) => {
     /*
-     * Skipped on phone emulation only, and only for now. isMobile emulation
-     * sometimes computes an initial zoom-out on the single-row filtered page
-     * (innerHeight reports ~1630 on an 839 viewport), which re-centres the
-     * dialog in the zoomed layout viewport and taps land on the overlay. Two
-     * genuine rendering bugs found during that investigation are already fixed
-     * (scale-in's double translation; dialog autofocus displacement); the
-     * intermittent overflow source is tracked as its own task. Desktop and
-     * tablet exercise the full flow.
+     * Guards the applicants page against the document growing wider than the
+     * viewport — the failure that used to zoom phones out and drop taps on the
+     * confirm dialog's overlay. The filtered single-row view is the load-bearing
+     * case: the fixture is 10 days old, so its row renders the sr-only "waiting
+     * more than a week" note whose escape from the table's scroll box caused
+     * exactly that. Checked two ways because the symptoms differ by platform:
+     * on desktop the document just scrolls sideways (scrollWidth > innerWidth),
+     * while a phone browser instead zooms out, expanding innerWidth itself past
+     * the device width.
      */
-    test.skip(isMobile, 'tracked: mobile emulation zoom-out on single-row filtered page')
+    for (const width of [320, 375, 412, 768, 1024, 1440, 1920]) {
+      await page.setViewportSize({ width, height: 900 })
+      await page.goto(`/admin/applications?q=${encodeURIComponent(volunteer.email)}`)
+      await expect(page.locator('tbody tr').first()).toBeVisible()
+      const geometry = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+      }))
+      expect(geometry.scrollWidth, `document overflow at ${width}px`).toBeLessThanOrEqual(
+        geometry.innerWidth,
+      )
+      expect(geometry.innerWidth, `zoomed-out layout viewport at ${width}px`).toBeLessThanOrEqual(
+        width,
+      )
+    }
+  })
 
+  test('approves everything in the filtered view, with a counted confirmation', async ({ page }) => {
     await page.goto(`/admin/applications?q=${encodeURIComponent(volunteer.email)}`)
 
     // The button names the number it will act on.

@@ -410,20 +410,19 @@ export async function updateSettingsAction(input: unknown): Promise<ActionResult
   return ok()
 }
 
-const capacitySchema = z.object({
+const departmentStateSchema = z.object({
   departmentId: z.string().min(1),
-  capacity: z.number().int().min(0).nullable(),
   isActive: z.boolean(),
 })
 
 export async function updateDepartmentAction(input: unknown): Promise<ActionResult> {
   const user = await requirePermission('department:manage')
-  const parsed = parseOrFail(capacitySchema, input)
+  const parsed = parseOrFail(departmentStateSchema, input)
   if (!parsed.ok) return parsed.result
 
   await db.department.update({
     where: { id: parsed.data.departmentId },
-    data: { capacity: parsed.data.capacity, isActive: parsed.data.isActive },
+    data: { isActive: parsed.data.isActive },
   })
 
   await audit({
@@ -431,7 +430,7 @@ export async function updateDepartmentAction(input: unknown): Promise<ActionResu
     entityType: 'Department',
     entityId: parsed.data.departmentId,
     actorId: user.id,
-    metadata: { capacity: parsed.data.capacity, isActive: parsed.data.isActive },
+    metadata: { isActive: parsed.data.isActive },
   })
 
   revalidatePath('/admin/departments')
@@ -452,7 +451,7 @@ const moderationSchema = z.object({
  * APPROVED, so the queue is the only path to publication.
  */
 export async function moderateTestimonyAction(input: unknown): Promise<ActionResult> {
-  const user = await requirePermission('application:review')
+  const user = await requirePermission('testimony:moderate')
   const parsed = parseOrFail(moderationSchema, input)
   if (!parsed.ok) return parsed.result
 
@@ -462,18 +461,34 @@ export async function moderateTestimonyAction(input: unknown): Promise<ActionRes
   })
   if (!submission) return fail('Testimony not found')
 
-  await db.testimonySubmission.update({
-    where: { id: submission.id },
-    data: {
-      status: parsed.data.status,
-      reviewNote: parsed.data.note?.trim() || null,
-      reviewedById: user.id,
-      reviewedAt: new Date(),
-    },
-  })
+  const note = parsed.data.note?.trim()
+
+  await db.$transaction([
+    db.testimonySubmission.update({
+      where: { id: submission.id },
+      data: {
+        status: parsed.data.status,
+        reviewNote: note || null,
+        reviewedById: user.id,
+        reviewedAt: new Date(),
+      },
+    }),
+    /*
+     * The note joins the timeline rather than only overwriting `reviewNote`.
+     * A submission that was declined, discussed and reopened has a history,
+     * and "who said what, when" is what the next moderator needs.
+     */
+    ...(note
+      ? [
+          db.testimonyNote.create({
+            data: { testimonyId: submission.id, authorId: user.id, body: note },
+          }),
+        ]
+      : []),
+  ])
 
   await audit({
-    action: 'application.note_added',
+    action: 'testimony.moderated',
     entityType: 'TestimonySubmission',
     entityId: submission.id,
     actorId: user.id,
@@ -485,6 +500,125 @@ export async function moderateTestimonyAction(input: unknown): Promise<ActionRes
   return ok()
 }
 
+// --- Testimony workload -----------------------------------------------------
+
+/** Take or hand over a testimony. Advisory, never a lock. */
+export async function assignTestimonyAction(id: string, toSelf: boolean): Promise<ActionResult> {
+  const user = await requirePermission('testimony:moderate')
+
+  const submission = await db.testimonySubmission.findUnique({ where: { id }, select: { id: true } })
+  if (!submission) return fail('Testimony not found')
+
+  await db.testimonySubmission.update({
+    where: { id },
+    data: { assignedToId: toSelf ? user.id : null },
+  })
+
+  revalidatePath('/admin/testimonies')
+  return ok()
+}
+
+const testimonyFlagsSchema = z.object({
+  id: z.string().min(1),
+  isSpam: z.boolean().optional(),
+  isTestData: z.boolean().optional(),
+  featured: z.boolean().optional(),
+})
+
+/** Tag spam or test data, or feature an approved testimony. */
+export async function setTestimonyFlagsAction(input: unknown): Promise<ActionResult> {
+  const user = await requirePermission('testimony:moderate')
+  const parsed = parseOrFail(testimonyFlagsSchema, input)
+  if (!parsed.ok) return parsed.result
+
+  const submission = await db.testimonySubmission.findUnique({
+    where: { id: parsed.data.id },
+    select: { id: true, status: true },
+  })
+  if (!submission) return fail('Testimony not found')
+
+  if (parsed.data.featured && submission.status !== 'APPROVED') {
+    // Featuring publishes; only approval decides what may be published.
+    return fail('Only an approved testimony can be featured')
+  }
+
+  await db.testimonySubmission.update({
+    where: { id: parsed.data.id },
+    data: {
+      ...(parsed.data.isSpam !== undefined ? { isSpam: parsed.data.isSpam } : {}),
+      ...(parsed.data.isTestData !== undefined ? { isTestData: parsed.data.isTestData } : {}),
+      ...(parsed.data.featured !== undefined
+        ? { featuredAt: parsed.data.featured ? new Date() : null }
+        : {}),
+    },
+  })
+
+  await audit({
+    action: 'testimony.moderated',
+    entityType: 'TestimonySubmission',
+    entityId: parsed.data.id,
+    actorId: user.id,
+    metadata: { flags: parsed.data },
+  })
+
+  revalidatePath('/admin/testimonies')
+  return ok()
+}
+
+/** Add to the moderation timeline without changing the status. */
+export async function addTestimonyNoteAction(id: string, body: string): Promise<ActionResult> {
+  const user = await requirePermission('testimony:moderate')
+
+  const text = body.trim()
+  if (!text) return fail('Write the note first')
+  if (text.length > 1000) return fail('Notes are limited to 1,000 characters')
+
+  const submission = await db.testimonySubmission.findUnique({ where: { id }, select: { id: true } })
+  if (!submission) return fail('Testimony not found')
+
+  await db.testimonyNote.create({ data: { testimonyId: id, authorId: user.id, body: text } })
+
+  revalidatePath('/admin/testimonies')
+  return ok()
+}
+
+/**
+ * Reject every tagged test submission in one pass.
+ *
+ * Counted like bulk approval: the dialog showed a number, the server re-counts
+ * and refuses if it changed. Only rows already *tagged* as test data are
+ * touched — tagging is the human judgement, this is just the broom.
+ */
+export async function bulkRejectTestDataAction(
+  expectedCount: number,
+): Promise<ActionResult<{ rejected: number }>> {
+  const user = await requirePermission('testimony:moderate')
+
+  const where = { isTestData: true, status: 'PENDING' as const }
+  const matching = await db.testimonySubmission.count({ where })
+  if (matching === 0) return fail('No pending submissions are tagged as test data.')
+  if (matching !== expectedCount) {
+    return fail(
+      `${matching} pending submissions are tagged as test data now, not the ${expectedCount} you confirmed. Nothing was changed.`,
+    )
+  }
+
+  await db.testimonySubmission.updateMany({
+    where,
+    data: { status: 'REJECTED', reviewedById: user.id, reviewedAt: new Date() },
+  })
+
+  await audit({
+    action: 'testimony.moderated',
+    entityType: 'TestimonySubmission',
+    actorId: user.id,
+    metadata: { event: 'bulk_reject_test_data', count: matching },
+  })
+
+  revalidatePath('/admin/testimonies')
+  return ok({ rejected: matching })
+}
+
 const contactTriageSchema = z.object({
   id: z.string().min(1),
   status: z.enum(['NEW', 'IN_PROGRESS', 'RESOLVED']),
@@ -493,7 +627,7 @@ const contactTriageSchema = z.object({
 
 /** Move a contact message through triage and record who dealt with it. */
 export async function triageContactMessageAction(input: unknown): Promise<ActionResult> {
-  const user = await requirePermission('application:review')
+  const user = await requirePermission('contact:manage')
   const parsed = parseOrFail(contactTriageSchema, input)
   if (!parsed.ok) return parsed.result
 
@@ -503,18 +637,26 @@ export async function triageContactMessageAction(input: unknown): Promise<Action
   })
   if (!message) return fail('Message not found')
 
-  await db.contactMessage.update({
-    where: { id: message.id },
-    data: {
-      status: parsed.data.status,
-      handlerNote: parsed.data.note?.trim() || null,
-      handledById: user.id,
-      handledAt: new Date(),
-    },
-  })
+  const note = parsed.data.note?.trim()
+
+  await db.$transaction([
+    db.contactMessage.update({
+      where: { id: message.id },
+      data: {
+        status: parsed.data.status,
+        handlerNote: note || null,
+        handledById: user.id,
+        handledAt: new Date(),
+      },
+    }),
+    // Notes accumulate in the timeline; the legacy field just mirrors the last.
+    ...(note
+      ? [db.contactNote.create({ data: { messageId: message.id, authorId: user.id, body: note } })]
+      : []),
+  ])
 
   await audit({
-    action: 'application.note_added',
+    action: 'contact.triaged',
     entityType: 'ContactMessage',
     entityId: message.id,
     actorId: user.id,
@@ -626,4 +768,114 @@ export async function bulkApproveAction(
   revalidatePath('/admin')
 
   return ok({ approved, remaining: matching - approved })
+}
+
+// --- Contact helpdesk -------------------------------------------------------
+
+/** Take or hand over a message. Advisory, never a lock. */
+export async function assignContactMessageAction(id: string, toSelf: boolean): Promise<ActionResult> {
+  const user = await requirePermission('contact:manage')
+
+  const message = await db.contactMessage.findUnique({ where: { id }, select: { id: true } })
+  if (!message) return fail('Message not found')
+
+  await db.contactMessage.update({
+    where: { id },
+    data: { assignedToId: toSelf ? user.id : null },
+  })
+
+  revalidatePath('/admin/messages')
+  return ok()
+}
+
+const contactControlsSchema = z.object({
+  id: z.string().min(1),
+  priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).optional(),
+  isSpam: z.boolean().optional(),
+  isTestData: z.boolean().optional(),
+})
+
+/** Priority and spam/test tagging for one message. */
+export async function setContactControlsAction(input: unknown): Promise<ActionResult> {
+  const user = await requirePermission('contact:manage')
+  const parsed = parseOrFail(contactControlsSchema, input)
+  if (!parsed.ok) return parsed.result
+
+  const message = await db.contactMessage.findUnique({
+    where: { id: parsed.data.id },
+    select: { id: true },
+  })
+  if (!message) return fail('Message not found')
+
+  await db.contactMessage.update({
+    where: { id: parsed.data.id },
+    data: {
+      ...(parsed.data.priority ? { priority: parsed.data.priority } : {}),
+      ...(parsed.data.isSpam !== undefined ? { isSpam: parsed.data.isSpam } : {}),
+      ...(parsed.data.isTestData !== undefined ? { isTestData: parsed.data.isTestData } : {}),
+    },
+  })
+
+  await audit({
+    action: 'contact.triaged',
+    entityType: 'ContactMessage',
+    entityId: parsed.data.id,
+    actorId: user.id,
+    metadata: { controls: parsed.data },
+  })
+
+  revalidatePath('/admin/messages')
+  return ok()
+}
+
+/** Add to a message's note timeline without changing its status. */
+export async function addContactNoteAction(id: string, body: string): Promise<ActionResult> {
+  const user = await requirePermission('contact:manage')
+
+  const text = body.trim()
+  if (!text) return fail('Write the note first')
+  if (text.length > 1000) return fail('Notes are limited to 1,000 characters')
+
+  const message = await db.contactMessage.findUnique({ where: { id }, select: { id: true } })
+  if (!message) return fail('Message not found')
+
+  await db.contactNote.create({ data: { messageId: id, authorId: user.id, body: text } })
+
+  revalidatePath('/admin/messages')
+  return ok()
+}
+
+/**
+ * Resolve every tagged test message in one counted pass — the same contract as
+ * every other bulk action here: the dialog showed a number, the server
+ * re-counts, and a changed queue refuses rather than acting on it.
+ */
+export async function bulkResolveTestMessagesAction(
+  expectedCount: number,
+): Promise<ActionResult<{ resolved: number }>> {
+  const user = await requirePermission('contact:manage')
+
+  const where = { isTestData: true, status: { not: 'RESOLVED' as const } }
+  const matching = await db.contactMessage.count({ where })
+  if (matching === 0) return fail('No open messages are tagged as test data.')
+  if (matching !== expectedCount) {
+    return fail(
+      `${matching} open messages are tagged as test data now, not the ${expectedCount} you confirmed. Nothing was changed.`,
+    )
+  }
+
+  await db.contactMessage.updateMany({
+    where,
+    data: { status: 'RESOLVED', handledById: user.id, handledAt: new Date() },
+  })
+
+  await audit({
+    action: 'contact.triaged',
+    entityType: 'ContactMessage',
+    actorId: user.id,
+    metadata: { event: 'bulk_resolve_test_data', count: matching },
+  })
+
+  revalidatePath('/admin/messages')
+  return ok({ resolved: matching })
 }

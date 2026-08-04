@@ -189,12 +189,11 @@ async function seedDepartments() {
   for (const [index, dept] of DEPARTMENTS.entries()) {
     const department = await db.department.upsert({
       where: { slug: dept.slug },
-      update: { name: dept.name, description: dept.description, capacity: dept.capacity, sortOrder: index },
+      update: { name: dept.name, description: dept.description, sortOrder: index },
       create: {
         slug: dept.slug,
         name: dept.name,
         description: dept.description,
-        capacity: dept.capacity,
         sortOrder: index,
       },
     })

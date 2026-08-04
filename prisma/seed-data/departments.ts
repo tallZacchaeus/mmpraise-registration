@@ -39,7 +39,6 @@ export type DepartmentSeed = {
   slug: string
   name: string
   description: string
-  capacity?: number
   questions: QuestionSeed[]
 }
 
@@ -53,7 +52,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'soteria',
     name: 'Soteria',
     description: 'Intercession and altar ministry supporting the praise marathon in prayer.',
-    capacity: 300,
     questions: [
       {
         key: 'existing_member',
@@ -81,7 +79,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'ushering',
     name: 'Ushering',
     description: 'Welcoming and seating guests, managing aisles and directing attendees.',
-    capacity: 500,
     questions: [
       { key: 'ushered_before', label: 'Have you worked as an usher before?', type: 'RADIO', isRequired: true, options: YES_NO },
       {
@@ -99,7 +96,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'praise-team',
     name: 'Volunteers Praise Team',
     description: 'Singers and instrumentalists leading worship across the marathon.',
-    capacity: 400,
     questions: [
       {
         key: 'first_time',
@@ -155,7 +151,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'registration-team',
     name: 'Registration Team',
     description: 'Checking in volunteers and guests, managing accreditation desks.',
-    capacity: 200,
     questions: [
       { key: 'worked_registration_before', label: 'Have you worked in event registration before?', type: 'RADIO', isRequired: true, options: YES_NO },
       {
@@ -183,7 +178,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'media',
     name: 'Media',
     description: 'Photography, video, live streaming, audio and social coverage.',
-    capacity: 150,
     questions: [
       {
         key: 'media_skills',
@@ -241,7 +235,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'welfare',
     name: 'Welfare',
     description: 'Hospitality, refreshments and care for volunteers and ministers.',
-    capacity: 250,
     questions: [
       { key: 'volunteered_before', label: 'Have you volunteered in the Welfare Department before?', type: 'RADIO', isRequired: true, options: YES_NO },
       {
@@ -257,7 +250,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'medical',
     name: 'Medical',
     description: 'First aid and medical cover for volunteers and attendees.',
-    capacity: 80,
     questions: [
       { key: 'volunteered_before', label: 'Have you volunteered in the Medical Department before?', type: 'RADIO', isRequired: true, options: YES_NO },
       {
@@ -300,7 +292,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'sanitation',
     name: 'Sanitation',
     description: 'Keeping the venue clean and safe throughout the marathon.',
-    capacity: 200,
     questions: [
       { key: 'volunteered_before', label: 'Have you volunteered in the Sanitation Department before?', type: 'RADIO', isRequired: true, options: YES_NO },
       { key: 'rotating_shifts_ok', label: 'Are you comfortable working in rotating sanitation shifts?', type: 'RADIO', isRequired: true, options: YES_NO },
@@ -310,7 +301,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'security',
     name: 'Security',
     description: 'Crowd safety, access control and incident response.',
-    capacity: 180,
     questions: [
       { key: 'first_time_security', label: 'Is this your first time volunteering for Security at MMPraise?', type: 'RADIO', isRequired: true, options: YES_NO },
       {
@@ -342,7 +332,6 @@ export const DEPARTMENTS: DepartmentSeed[] = [
     slug: 'logistics',
     name: 'Logistics',
     description: 'Transport, equipment, inventory and venue setup.',
-    capacity: 220,
     questions: [
       { key: 'worked_logistics_before', label: 'Have you worked in the Logistics Department at an event before?', type: 'RADIO', isRequired: true, options: YES_NO },
       { key: 'six_hour_shift', label: 'Are you available to work for up to six hours per shift?', type: 'RADIO', isRequired: true, options: YES_NO },

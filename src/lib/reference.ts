@@ -70,7 +70,7 @@ export const getLookupOptions = cache(async (category: LookupCategory) =>
 export const getDepartments = cache(async () =>
   db.department.findMany({
     where: { isActive: true },
-    select: { id: true, slug: true, name: true, description: true, capacity: true },
+    select: { id: true, slug: true, name: true, description: true },
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   }),
 )

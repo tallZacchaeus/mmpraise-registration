@@ -234,3 +234,98 @@ export async function seedSubmittedVolunteer(prefix = 'subm'): Promise<SeededVol
 
   return volunteer
 }
+
+/**
+ * A testimony submission, written straight to the database.
+ *
+ * The body hash uses the same module the application writes with, so the
+ * duplicate detection under test is the real rule, not a copy of it.
+ */
+/**
+ * A contact message, written straight to the database.
+ *
+ * As with testimonies, the message hash comes from the shared module so the
+ * duplicate grouping under test is the application's real rule.
+ */
+export async function seedContactMessage(options: {
+  prefix?: string
+  message: string
+  subject?: string
+  name?: string
+  email?: string
+  isTestData?: boolean
+}): Promise<{ id: string; email: string; subject: string }> {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+
+  const { normalisedBodyHash } = await import('../../src/lib/testimonies/hash')
+  const stamp = randomUUID().replace(/-/g, '').slice(0, 12)
+  const id = `cm_${stamp}`
+  const subject = options.subject ?? `Enquiry ${stamp}`
+  const email = options.email ?? `${options.prefix ?? 'ask'}.${stamp}@example.org`
+
+  const client = new Client({ connectionString })
+  await client.connect()
+  try {
+    await client.query(
+      `INSERT INTO contact_messages
+         (id, category, name, email, subject, message, status, priority,
+          "messageHash", "isTestData", "createdAt", "updatedAt")
+       VALUES ($1, 'GENERAL', $2, $3, $4, $5, 'NEW', 'NORMAL', $6, $7, now(), now())`,
+      [
+        id,
+        options.name ?? 'Kemi Balogun',
+        email,
+        subject,
+        options.message,
+        normalisedBodyHash(options.message),
+        options.isTestData ?? false,
+      ],
+    )
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+
+  return { id, email, subject }
+}
+
+export async function seedTestimony(options: {
+  prefix?: string
+  body: string
+  title?: string
+  authorName?: string
+  isTestData?: boolean
+}): Promise<{ id: string; email: string; title: string }> {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+
+  const { testimonyBodyHash } = await import('../../src/lib/testimonies/hash')
+  const stamp = randomUUID().replace(/-/g, '').slice(0, 12)
+  const id = `t_${stamp}`
+  const title = options.title ?? `Praise report ${stamp}`
+  const email = `${options.prefix ?? 'story'}.${stamp}@example.org`
+
+  const client = new Client({ connectionString })
+  await client.connect()
+  try {
+    await client.query(
+      `INSERT INTO testimony_submissions
+         (id, title, body, "authorName", email, country, "isAnonymous", "consentToPublish",
+          status, "bodyHash", "isTestData", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, 'Nigeria', false, true, 'PENDING', $6, $7, now(), now())`,
+      [
+        id,
+        title,
+        options.body,
+        options.authorName ?? 'Grace Adeyemi',
+        email,
+        testimonyBodyHash(options.body),
+        options.isTestData ?? false,
+      ],
+    )
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+
+  return { id, email, title }
+}

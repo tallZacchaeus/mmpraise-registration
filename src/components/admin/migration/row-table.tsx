@@ -114,7 +114,8 @@ export async function RowTable({
             }
           />
         ) : (
-          <div className="overflow-x-auto">
+          /* `relative` so the scroll box clips its absolute (sr-only) descendants. */
+          <div className="relative overflow-x-auto">
             <table className="w-full min-w-[56rem] border-collapse text-sm">
               <caption className="sr-only">
                 Rows in this import, with what happened to each and any problems found.

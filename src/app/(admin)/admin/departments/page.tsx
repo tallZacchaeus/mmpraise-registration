@@ -3,15 +3,35 @@ import Link from 'next/link'
 import { ClipboardList } from 'lucide-react'
 import { DepartmentRow } from '@/components/admin/department-row'
 import { buttonClass, Card, CardBody, CardHeader } from '@/components/ui/primitives'
+import { eventConfig } from '@/config/site'
 import { can, requirePermission } from '@/lib/auth/rbac'
-import { getDepartmentsWithLoad } from '@/lib/reference'
 import { db } from '@/lib/db'
 
 export const metadata: Metadata = { title: 'Departments and questions' }
 
 export default async function DepartmentsPage() {
   const user = await requirePermission('question:manage')
-  const departments = await getDepartmentsWithLoad()
+
+  /*
+   * All departments, including closed ones — queried here rather than through
+   * `getDepartments`, which serves the volunteer-facing picker and rightly
+   * filters to active. This page is where a closed department gets re-opened;
+   * built on the filtered list, a closed department vanished from the only
+   * screen that could bring it back.
+   */
+  const [rows, participationCounts] = await Promise.all([
+    db.department.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      select: { id: true, slug: true, name: true, description: true, isActive: true },
+    }),
+    db.editionParticipation.groupBy({
+      by: ['departmentId'],
+      where: { edition: eventConfig.edition, application: { status: { not: 'DRAFT' } } },
+      _count: { _all: true },
+    }),
+  ])
+  const applied = new Map(participationCounts.map((row) => [row.departmentId, row._count._all]))
+  const departments = rows.map((row) => ({ ...row, applied: applied.get(row.id) ?? 0 }))
 
   const questionCounts = await db.departmentQuestion.groupBy({
     by: ['departmentId'],
@@ -25,7 +45,7 @@ export default async function DepartmentsPage() {
       <div>
         <h1 className="text-3xl">Departments and questions</h1>
         <p className="mt-1 text-body">
-          Set capacity, open or close a department, and edit the questions volunteers are asked.
+          Open or close a department, and edit the questions volunteers are asked.
         </p>
       </div>
 
@@ -41,19 +61,14 @@ export default async function DepartmentsPage() {
                 <div className="min-w-0">
                   <p className="font-display text-base font-bold uppercase text-ink">{department.name}</p>
                   <p className="text-sm text-muted">
-                    {department.applied} applied
-                    {department.capacity ? ` of ${department.capacity}` : ''} ·{' '}
+                    {department.applied} applied ·{' '}
                     {counts.get(department.id) ?? 0} question{(counts.get(department.id) ?? 0) === 1 ? '' : 's'}
                   </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3">
                   {can(user, 'department:manage') && (
-                    <DepartmentRow
-                      departmentId={department.id}
-                      capacity={department.capacity}
-                      isActive
-                    />
+                    <DepartmentRow departmentId={department.id} isActive={department.isActive} />
                   )}
                   <Link
                     href={`/admin/departments/${department.id}/questions`}

@@ -23,7 +23,6 @@ type DepartmentOption = {
   slug: string
   name: string
   description: string | null
-  capacity: number | null
   applied: number
 }
 

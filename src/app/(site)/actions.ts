@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { db } from '@/lib/db'
 import { audit } from '@/lib/audit'
 import { clientIp } from '@/lib/auth/session'
+import { normalisedBodyHash, testimonyBodyHash } from '@/lib/testimonies/hash'
 import { fail, ok, parseOrFail, type ActionResult } from '@/lib/actions/result'
 import { ipKey, rateLimit } from '@/lib/security/rate-limit'
 import { emailSchema, multilineText, nameSchema, trimmedText } from '@/lib/validation/common'
@@ -61,6 +62,8 @@ export async function submitTestimonyAction(input: unknown): Promise<ActionResul
     data: {
       title: parsed.data.title || null,
       body: parsed.data.body,
+      // Duplicate detection is a hash lookup, computed once at the source.
+      bodyHash: testimonyBodyHash(parsed.data.body),
       authorName: parsed.data.authorName,
       email: parsed.data.email,
       phone: parsed.data.phone || null,
@@ -165,6 +168,8 @@ export async function submitContactAction(input: unknown): Promise<ActionResult>
 
   const created = await db.contactMessage.create({
     data: {
+      // One hash rule everywhere "duplicate" appears in the admin.
+      messageHash: normalisedBodyHash(parsed.data.message),
       category: parsed.data.category,
       name: parsed.data.name,
       email: parsed.data.email,

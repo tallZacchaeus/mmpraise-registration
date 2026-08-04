@@ -115,7 +115,8 @@ export function ColumnMapping({
         </Alert>
       )}
 
-      <div className="overflow-x-auto">
+      {/* `relative` so the scroll box clips its absolute (sr-only) descendants. */}
+      <div className="relative overflow-x-auto">
         <table className="w-full min-w-[44rem] border-collapse text-sm">
           <caption className="sr-only">
             Each column in the uploaded file, an example of its contents, and the field it will be
