@@ -21,7 +21,7 @@
 
 ## Launch scope — what is live in the first release
 
-The first release opens **the homepage and the registration journey only**. Everything else on the
+The first release opens **the homepage, the About page, the Contact page and the registration journey**. Everything else on the
 public site renders as "Coming soon" instead of linking to a page that does not exist yet or back to
 the old WordPress site.
 
@@ -31,6 +31,8 @@ without them:
 | Route | Purpose |
 |---|---|
 | `/` | Homepage |
+| `/about` | About page |
+| `/contact` | Contact page and message form |
 | `/register`, `/login`, `/verify-email`, `/forgot-password`, `/reset-password` | Account access |
 | `/apply`, `/apply/[step]`, `/apply/submitted` | The nine-step wizard |
 | `/dashboard`, `/dashboard/summary`, `/dashboard/account` | Volunteer dashboard |
@@ -46,13 +48,13 @@ without them:
 | `NEXT_PUBLIC_FEATURE_SHARE_TESTIMONY` | `true` | On-page testimony form — moderated before publishing |
 | `NEXT_PUBLIC_FEATURE_NEWSLETTER` | `true` | On-page newsletter signup |
 | `NEXT_PUBLIC_FEATURE_GIVE` | `false` | **Donations** — see the note below |
-| `NEXT_PUBLIC_FEATURE_ABOUT` | `false` | About page link |
+| `NEXT_PUBLIC_FEATURE_ABOUT` | `true` | The `/about` page and every link to it |
 | `NEXT_PUBLIC_FEATURE_BLOG` | `false` | Blog link and media card |
 | `NEXT_PUBLIC_FEATURE_GALLERY` | `false` | Gallery link and media card |
 | `NEXT_PUBLIC_FEATURE_MAGAZINE` | `false` | Magazine menu item and media card |
 | `NEXT_PUBLIC_FEATURE_RADIO` | `false` | Radio menu item and media card |
 | `NEXT_PUBLIC_FEATURE_PRAYER_REQUEST` | `false` | Prayer request link |
-| `NEXT_PUBLIC_FEATURE_CONTACT` | `false` | Contact page link (the email address still renders) |
+| `NEXT_PUBLIC_FEATURE_CONTACT` | `true` | The `/contact` page and every link to it |
 
 > **Donations are switched off.** Giving is a working revenue path on the current site. It was
 > disabled here on instruction, so no visitor can donate through the new homepage until you set

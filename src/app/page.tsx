@@ -4,7 +4,6 @@ import Link from 'next/link'
 import {
   ArrowRight,
   CalendarDays,
-  ChevronDown,
   Clock,
   Gift,
   HandHeart,
@@ -16,6 +15,8 @@ import {
   Users,
 } from 'lucide-react'
 import { AnnouncementBar } from '@/components/site/announcement-bar'
+import { CtaPair } from '@/components/site/cta'
+import { Hero } from '@/components/site/hero'
 import { EventCountdown } from '@/components/site/event-countdown'
 import { NewsletterForm } from '@/components/site/newsletter-form'
 import { SiteFooter } from '@/components/site/site-footer'
@@ -23,11 +24,15 @@ import { SiteHeader } from '@/components/site/site-header'
 import { TestimonyCard } from '@/components/site/testimony-card'
 import { TestimonyForm } from '@/components/site/testimony-form'
 import { buttonClass, Card, CardBody, Eyebrow } from '@/components/ui/primitives'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { ReachFigure } from '@/components/site/reach-figure'
+import { Reveal, RevealStagger } from '@/components/ui/reveal'
 import {
   contact,
   eventConfig,
   eventEndsAt,
   eventStartsAt,
+  eventSummarySentence,
   isExternal,
   links,
   siteConfig,
@@ -196,68 +201,70 @@ export default async function HomePage() {
         linkLabel={registrationOpen ? 'Apply now' : 'Learn more'}
       />
 
-      <SiteHeader isSignedIn={Boolean(user)} />
+      <SiteHeader isSignedIn={Boolean(user)} overlay />
 
       <main id="main">
         {/* ------------------------------------------------------------- Hero */}
-        <section className="relative overflow-hidden px-4 py-20 text-white sm:px-6 sm:py-28">
-          <Image
-            src={hero.image.src}
-            alt={hero.image.alt}
-            fill
-            priority
-            sizes="100vw"
-            className="absolute inset-0 object-cover"
-          />
-          {/* Flat scrim rather than a gradient, dark enough that display type
-              stays legible over any frame of the photograph. */}
-          <div aria-hidden className="absolute inset-0 bg-night/72" />
-
-          <div className="container-content relative max-w-4xl text-center">
-            <p className="inline-flex rounded-pill bg-primary px-4 py-1.5 font-display text-sm font-bold uppercase tracking-wide text-white">
+        <Hero
+          image={hero.image}
+          stats={[
+            { value: `${eventConfig.durationHours} hours`, label: 'Non-stop praise' },
+            { value: `${eventConfig.nationsCount} nations`, label: 'Global worship' },
+            { value: `Since ${eventConfig.foundedYear}`, label: 'A legacy of praise' },
+          ]}
+        >
+          <div className="mx-auto max-w-4xl">
+            <p
+              data-hero-badge
+              className="inline-flex rounded-pill bg-primary px-4 py-1.5 font-display text-sm font-bold uppercase tracking-wide text-white"
+            >
               {hero.eyebrow}
             </p>
 
-            {/* The current site has no H1 anywhere on the page. */}
-            <h1 className="mt-6 text-4xl text-white sm:text-5xl lg:text-6xl">{hero.heading}</h1>
-            <p className="mx-auto mt-5 max-w-2xl text-lg text-white/85">{hero.standfirst}</p>
+            {/* The current site has no H1 anywhere on the page. Each line is
+                wrapped so the timeline can raise them in sequence; the overflow
+                clip is what gives the reveal its edge. */}
+            <h1 className="mt-6 text-4xl text-white sm:text-5xl lg:text-6xl">
+              {hero.heading.split(' — ').map((line, index) => (
+                <span key={line} className="block overflow-hidden pb-1">
+                  <span data-hero-line className="block">
+                    {index === 0 ? `${line} ` : `— ${line}`}
+                  </span>
+                </span>
+              ))}
+            </h1>
+
+            <p data-hero-standfirst className="mx-auto mt-5 max-w-2xl text-lg text-white/85">
+              {hero.standfirst}
+            </p>
 
             <ul className="mx-auto mt-8 flex max-w-3xl flex-wrap justify-center gap-x-8 gap-y-3 text-sm text-white/85">
-              <li className="flex items-center gap-2">
+              <li data-hero-fact className="flex items-center gap-2">
                 <CalendarDays aria-hidden className="size-4 shrink-0" />
                 <span className="sr-only">Date: </span>
                 {startsAt ? dateFormatter.format(startsAt) : 'Dates to be announced'}
               </li>
-              <li className="flex items-center gap-2">
+              <li data-hero-fact className="flex items-center gap-2">
                 <MapPin aria-hidden className="size-4 shrink-0" />
                 <span className="sr-only">Venue: </span>
                 {eventConfig.venue.name}
               </li>
-              <li className="flex items-center gap-2">
+              <li data-hero-fact className="flex items-center gap-2">
                 <PlayCircle aria-hidden className="size-4 shrink-0" />
                 Watch live online
               </li>
             </ul>
 
-            <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
-              <Link href={links.register} className={buttonClass({ size: 'lg' })}>
-                <Ticket aria-hidden className="size-4" />
-                {user ? 'Continue registration' : 'Register to attend'}
-              </Link>
-              <Link
-                href={links.volunteer}
-                className={buttonClass({
-                  variant: 'ghost',
-                  size: 'lg',
-                  className: 'text-white ring-1 ring-inset ring-white/60 hover:bg-white/10',
-                })}
-              >
-                <HandHeart aria-hidden className="size-4" />
-                Volunteer
-              </Link>
-            </div>
+            {/* Volunteer leads; attending is the outline beside it. */}
+            <CtaPair
+              className="mt-9"
+              align="center"
+              onDark
+              registerLabel={user ? 'Continue registration' : 'Register to attend'}
+              itemProps={{ 'data-hero-cta': '' }}
+            />
           </div>
-        </section>
+        </Hero>
 
         {/* ---------------------------------------------------- Event summary */}
         <section className="section" aria-labelledby="about-heading">
@@ -308,6 +315,9 @@ export default async function HomePage() {
                 watchHref={links.livestream ?? '#updates'}
                 highlightsHref={links.youtube ?? '#updates'}
                 subscribeHref="#updates"
+                summary={eventSummarySentence()}
+                venue={eventConfig.venue.fullAddress}
+                edition={eventConfig.edition}
               />
             </div>
 
@@ -353,7 +363,7 @@ export default async function HomePage() {
               </p>
             </div>
 
-            <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <RevealStagger as="ul" className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" selector=":scope > li">
               {participationActions.map((action) => {
                 const Icon = ACTION_ICONS[action.icon]
                 const external = action.href ? isExternal(action.href) : false
@@ -398,7 +408,7 @@ export default async function HomePage() {
                   </li>
                 )
               })}
-            </ul>
+            </RevealStagger>
           </div>
         </section>
 
@@ -412,12 +422,12 @@ export default async function HomePage() {
               </h2>
             </div>
 
-            <ul className="mt-10 grid gap-6 md:grid-cols-3">
+            <RevealStagger as="ul" className="mt-10 grid gap-6 md:grid-cols-3" selector=":scope > li">
               {activities.items.map((item) => {
                 const external = item.href ? isExternal(item.href) : false
                 return (
                   <li key={item.title}>
-                    <Card className="h-full overflow-hidden">
+                    <Card className="card-lift h-full overflow-hidden">
                       <Image
                         src={item.image.src}
                         alt={item.alt}
@@ -448,44 +458,51 @@ export default async function HomePage() {
                   </li>
                 )
               })}
-            </ul>
+            </RevealStagger>
           </div>
         </section>
 
         {/* ------------------------------------------------------ Global reach */}
-        <section className="section" aria-labelledby="reach-heading">
-          <div className="container-content grid items-center gap-10 lg:grid-cols-2">
-            <div>
-              <h2 id="reach-heading" className="text-3xl sm:text-4xl">
+        <section
+          className="relative isolate overflow-hidden bg-night text-white"
+          aria-labelledby="reach-heading"
+        >
+          <div aria-hidden className="texture-grain absolute inset-0 -z-10 opacity-70" />
+
+          <div className="container-content section grid items-center gap-12 lg:grid-cols-2">
+            <Reveal>
+              {/* The one place on the page that speaks rather than explains. */}
+              <p className="font-display text-3xl font-bold uppercase leading-tight text-white sm:text-4xl lg:text-5xl">
+                One voice.
+                <br />
+                One worship.
+                <br />
+                <span className="text-gold">Across nations.</span>
+              </p>
+
+              <h2 id="reach-heading" className="mt-8 text-xl text-white sm:text-2xl">
                 {globalReach.heading}
               </h2>
-              <p className="mt-4 text-body">{globalReach.body}</p>
+              <p className="mt-4 max-w-prose text-white/80">{globalReach.body}</p>
 
-              <dl className="mt-8 flex flex-wrap gap-x-10 gap-y-6">
-                <div>
-                  <dt className="text-sm text-muted">Nations represented</dt>
-                  <dd className="font-display text-4xl font-bold text-ink">{eventConfig.nationsCount}</dd>
-                </div>
-                <div>
-                  <dt className="text-sm text-muted">Hours of praise</dt>
-                  <dd className="font-display text-4xl font-bold text-ink">{eventConfig.durationHours}</dd>
-                </div>
-                <div>
-                  <dt className="text-sm text-muted">Running since</dt>
-                  <dd className="font-display text-4xl font-bold text-ink">{eventConfig.foundedYear}</dd>
-                </div>
+              <dl className="mt-10 flex flex-wrap gap-x-12 gap-y-8">
+                <ReachFigure value={eventConfig.nationsCount} label="Nations represented" onDark />
+                <ReachFigure value={eventConfig.durationHours} label="Hours of praise" onDark />
+                <ReachFigure value={eventConfig.foundedYear} label="Running since" onDark animate={false} />
               </dl>
-            </div>
+            </Reveal>
 
-            <Image
-              src={globalReach.image.src}
-              alt={globalReach.alt}
-              width={globalReach.image.width}
-              height={globalReach.image.height}
-              sizes="(min-width: 1024px) 50vw, 100vw"
-              loading="lazy"
-              className="h-auto w-full rounded-card border border-line"
-            />
+            <Reveal delay={0.15}>
+              <Image
+                src={globalReach.image.src}
+                alt={globalReach.alt}
+                width={globalReach.image.width}
+                height={globalReach.image.height}
+                sizes="(min-width: 1024px) 50vw, 100vw"
+                loading="lazy"
+                className="h-auto w-full rounded-card border border-white/12"
+              />
+            </Reveal>
           </div>
         </section>
 
@@ -500,7 +517,7 @@ export default async function HomePage() {
               <p className="mt-4 text-body">{artistsSection.body}</p>
             </div>
 
-            <ul className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            <RevealStagger as="ul" className="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" selector=":scope > li">
               {artists.map((artist, index) => (
                 <li key={artist.id}>
                   <figure className="overflow-hidden rounded-card border border-line bg-surface">
@@ -530,7 +547,7 @@ export default async function HomePage() {
                   </figure>
                 </li>
               ))}
-            </ul>
+            </RevealStagger>
           </div>
         </section>
 
@@ -545,13 +562,22 @@ export default async function HomePage() {
               <p className="mt-4 text-body">{testimoniesSection.intro}</p>
             </div>
 
-            <ul className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-              {testimonies.map((testimony) => (
-                <li key={testimony.id}>
-                  <TestimonyCard testimony={testimony} />
+            {/*
+              The first testimony leads at double width and is never truncated;
+              the rest follow in the grid. A wall of seven identical cards gives
+              the reader nowhere to start.
+            */}
+            <RevealStagger
+              as="ul"
+              className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-3"
+              selector=":scope > li"
+            >
+              {testimonies.map((testimony, index) => (
+                <li key={testimony.id} className={index === 0 ? 'md:col-span-2' : undefined}>
+                  <TestimonyCard testimony={testimony} featured={index === 0} />
                 </li>
               ))}
-            </ul>
+            </RevealStagger>
 
             {/* Presented as personal accounts, not as verified claims. */}
             <p className="mt-8 max-w-3xl text-sm text-muted">{testimoniesSection.disclaimer}</p>
@@ -604,10 +630,10 @@ export default async function HomePage() {
               <p className="mt-4 text-body">{mediaSection.body}</p>
             </div>
 
-            <ul className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <RevealStagger as="ul" className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3" selector=":scope > li">
               {mediaResources.map((resource) => (
                 <li key={resource.id}>
-                  <Card className="h-full">
+                  <Card className="card-lift h-full">
                     <CardBody className="flex h-full flex-col">
                       <p className="font-display text-xs font-bold uppercase tracking-wide text-primary-active">
                         {resource.category}
@@ -633,7 +659,7 @@ export default async function HomePage() {
                   </Card>
                 </li>
               ))}
-            </ul>
+            </RevealStagger>
           </div>
         </section>
 
@@ -686,25 +712,24 @@ export default async function HomePage() {
               </h2>
             </div>
 
-            {/* Native details/summary: keyboard accessible, screen-reader
-                friendly, and it works with JavaScript disabled. */}
-            <div className="mt-10 space-y-3">
+            {/*
+              Radix accordion: roving arrow-key focus, correct aria-expanded /
+              aria-controls wiring, and a height transition that the
+              reduced-motion rule cancels. `type="multiple"` so opening one
+              answer never closes the one being read.
+
+              Every answer is present in the HTML and republished as FAQPage
+              structured data, so a crawler or a reader without JavaScript still
+              gets the content even though the toggle needs it.
+            */}
+            <Accordion type="multiple" className="mt-10">
               {faqs.map((faq) => (
-                <details
-                  key={faq.id}
-                  className="group rounded-card border border-line bg-surface px-5 py-4 open:shadow-[var(--shadow-card)]"
-                >
-                  <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 font-display text-base font-bold uppercase text-ink marker:content-none">
-                    {faq.question}
-                    <ChevronDown
-                      aria-hidden
-                      className="size-5 shrink-0 text-primary transition-transform group-open:rotate-180"
-                    />
-                  </summary>
-                  <p className="mt-3 text-body">{faq.answer}</p>
-                </details>
+                <AccordionItem key={faq.id} value={faq.id}>
+                  <AccordionTrigger>{faq.question}</AccordionTrigger>
+                  <AccordionContent>{faq.answer}</AccordionContent>
+                </AccordionItem>
               ))}
-            </div>
+            </Accordion>
           </div>
         </section>
 

@@ -41,14 +41,17 @@ export const features: Record<FeatureKey, boolean> = {
   shareTestimony: flag('NEXT_PUBLIC_FEATURE_SHARE_TESTIMONY', true),
   newsletter: flag('NEXT_PUBLIC_FEATURE_NEWSLETTER', true),
 
+  /** Built: /about is part of this application, not the old WordPress page. */
+  about: flag('NEXT_PUBLIC_FEATURE_ABOUT', true),
+
   // --- Coming soon ----------------------------------------------------------
-  about: flag('NEXT_PUBLIC_FEATURE_ABOUT', false),
   blog: flag('NEXT_PUBLIC_FEATURE_BLOG', false),
   gallery: flag('NEXT_PUBLIC_FEATURE_GALLERY', false),
   magazine: flag('NEXT_PUBLIC_FEATURE_MAGAZINE', false),
   radio: flag('NEXT_PUBLIC_FEATURE_RADIO', false),
   prayerRequest: flag('NEXT_PUBLIC_FEATURE_PRAYER_REQUEST', false),
-  contact: flag('NEXT_PUBLIC_FEATURE_CONTACT', false),
+  /** Built: /contact is part of this application, not the old WordPress page. */
+  contact: flag('NEXT_PUBLIC_FEATURE_CONTACT', true),
   /**
    * Donations are switched off for the first release on the client's
    * instruction. The destination still works on the current site, so this is

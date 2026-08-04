@@ -85,7 +85,8 @@ moderation before testimonies are published.
 | Issue | Handling |
 |---|---|
 | 82 vs 84 Hours | Single source of truth: `eventConfig.durationHours` in `src/config/site.ts`. The duration rises by one hour per edition — 2026 ran for 84, so the **2027 edition is set to 85**. A unit test asserts the value matches `84 + (edition − 2026)` and that no FAQ contradicts it. |
-| 82 nations vs 80 Countries | Body copy uses `event.nationsCount` (**82**, from the prose). The map graphic still reads "80 Countries" — flagged for re-export; not silently altered. |
+| 82 nations vs 80 Countries | Body copy uses `event.nationsCount` (**82**, from the prose). The map graphic still reads "80 Countries" — flagged for re-export; not silently altered. The About page states a third figure, 50. |
+| **Map and flyer assets were swapped** | `global-map.webp` held the "Beyond MMPraise" flyer and `worship-crowd.webp` held the actual world map, so this section rendered a flyer beneath map alt text. Corrected: the map is now `global-map.webp` and the flyer is `beyond-mmpraise-flyer.webp`. |
 | Repeated testimonies | Deduplicated to the 7 unique entries. The duplicate wrongly attributed to a second author was dropped, keeping the original attribution. |
 | Placeholder phone | Omitted rather than published. `NEXT_PUBLIC_CONTACT_PHONE` exists and renders only when set. |
 | © 2025 | Computed from the current year. |

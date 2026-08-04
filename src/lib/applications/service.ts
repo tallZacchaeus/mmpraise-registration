@@ -1,4 +1,5 @@
 import 'server-only'
+import { eventConfig } from '@/config/site'
 import { db } from '@/lib/db'
 import type { ApplicationStatus, Prisma } from '@/generated/prisma/client'
 import type { AnswerMap, QuestionDef } from '@/lib/questions/engine'
@@ -18,12 +19,15 @@ export { STATUS_LABELS, STATUS_TONES, canVolunteerEdit } from './status'
 
 export type WizardState = Awaited<ReturnType<typeof loadWizardState>>
 
-/** The volunteer's live application, created on first visit to the wizard. */
+/**
+ * The volunteer's application, created on first visit to the wizard.
+ *
+ * `findUnique` now, not `findFirst`: one application per person is a database
+ * constraint rather than a convention, so there is no "most recent" to choose
+ * between.
+ */
 export async function getOrCreateDraft(userId: string) {
-  const existing = await db.volunteerApplication.findFirst({
-    where: { userId },
-    orderBy: { createdAt: 'desc' },
-  })
+  const existing = await db.volunteerApplication.findUnique({ where: { userId } })
   if (existing) return existing
 
   try {
@@ -41,28 +45,63 @@ export async function getOrCreateDraft(userId: string) {
   } catch (error) {
     // Two requests can reach this point together (for example the wizard page
     // and its autosave). Whichever loses the race re-reads the winner's row.
-    const created = await db.volunteerApplication.findFirst({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    })
+    const created = await db.volunteerApplication.findUnique({ where: { userId } })
     if (created) return created
     throw error
   }
 }
 
+/**
+ * The volunteer's record for one edition, created the first time they engage
+ * with it.
+ *
+ * Upserted on `(applicationId, edition)`, which is unique — so a volunteer
+ * confirming twice updates one row rather than accumulating two, and a returning
+ * volunteer gets a fresh, empty record for the new edition without touching last
+ * edition's answers.
+ */
+export async function getOrCreateParticipation(
+  applicationId: string,
+  edition: string = eventConfig.edition,
+) {
+  try {
+    return await db.editionParticipation.upsert({
+      where: { applicationId_edition: { applicationId, edition } },
+      update: {},
+      create: {
+        applicationId,
+        edition,
+        year: Number(edition) || null,
+      },
+    })
+  } catch {
+    /*
+     * The same race `getOrCreateDraft` documents: the wizard page and its
+     * autosave can reach this together, and Prisma's upsert is not atomic here
+     * — it emulates with a read then a write, so the loser trips the
+     * `(applicationId, edition)` unique constraint instead of updating.
+     * Whichever request loses re-reads the winner's row.
+     */
+    return db.editionParticipation.findUniqueOrThrow({
+      where: { applicationId_edition: { applicationId, edition } },
+    })
+  }
+}
+
 export async function loadWizardState(userId: string) {
   const application = await getOrCreateDraft(userId)
+  const participation = await getOrCreateParticipation(application.id)
 
   const [profile, answers, availability, emergency, health, user] = await Promise.all([
     db.volunteerProfile.findUnique({ where: { userId } }),
     db.applicationAnswer.findMany({
-      where: { applicationId: application.id },
+      where: { participationId: participation.id },
       include: { question: { select: { key: true } }, options: { include: { option: { select: { value: true } } } } },
     }),
-    db.volunteerAvailability.findMany({ where: { applicationId: application.id } }),
+    db.volunteerAvailability.findMany({ where: { participationId: participation.id } }),
     db.emergencyContact.findUnique({ where: { applicationId: application.id } }),
     db.applicationHealthInfo.findUnique({ where: { applicationId: application.id } }),
-    db.user.findUnique({ where: { id: userId }, select: { email: true, username: true } }),
+    db.user.findUnique({ where: { id: userId }, select: { email: true, username: true, mmpCode: true } }),
   ])
 
   const answerMap: AnswerMap = {}
@@ -79,6 +118,7 @@ export async function loadWizardState(userId: string) {
 
   return {
     application,
+    participation,
     profile,
     user,
     answers: answerMap,
@@ -106,15 +146,21 @@ export async function saveDraftData(applicationId: string, step: string, values:
   })
 }
 
-/** Replace the stored answers for a department's questions. */
-export async function persistAnswers(applicationId: string, questions: QuestionDef[], answers: AnswerMap) {
+/**
+ * Replace the stored answers for a department's questions, for one edition.
+ *
+ * Scoped to the participation rather than the application: a volunteer who
+ * serves in Media one edition and Medical the next has two different sets of
+ * answers, and neither should overwrite the other.
+ */
+export async function persistAnswers(participationId: string, questions: QuestionDef[], answers: AnswerMap) {
   const cleaned = pruneHiddenAnswers(questions, answers)
   const byKey = new Map(questions.map((q) => [q.key, q]))
 
   await db.$transaction(async (tx) => {
     // Answers are replaced wholesale: it is the only way to guarantee that
     // answers to questions that became hidden do not linger.
-    await tx.applicationAnswer.deleteMany({ where: { applicationId } })
+    await tx.applicationAnswer.deleteMany({ where: { participationId } })
 
     for (const [key, value] of Object.entries(cleaned)) {
       const question = byKey.get(key)
@@ -122,7 +168,7 @@ export async function persistAnswers(applicationId: string, questions: QuestionD
 
       const created = await tx.applicationAnswer.create({
         data: {
-          applicationId,
+          participationId,
           questionId: question.id,
           valueText: value.text ?? null,
           valueNumber: value.number ?? null,
@@ -147,12 +193,19 @@ export async function persistAnswers(applicationId: string, questions: QuestionD
   })
 }
 
-/** Allocate the next human-readable registration number. */
+/**
+ * Allocate the next human-readable registration number.
+ *
+ * The year is the **edition's**, not today's. Using `new Date()` meant that
+ * everyone registering during 2026 for the March 2027 marathon was issued an
+ * `MMP-2026-…` identifier — a number that says the wrong event, on the badge
+ * they turn up holding and in every report about it. Historical identifiers are
+ * untouched: this only affects numbers issued from now on.
+ */
 export async function nextRegistrationId(): Promise<string> {
   const rows = await db.$queryRaw<{ nextval: bigint }[]>`SELECT nextval('registration_id_seq')`
   const value = Number(rows[0]?.nextval ?? 1)
-  const year = new Date().getUTCFullYear()
-  return `MMP-${year}-${String(value).padStart(6, '0')}`
+  return `MMP-${eventConfig.edition}-${String(value).padStart(6, '0')}`
 }
 
 /** Record a status transition and keep the application row in step. */

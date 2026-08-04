@@ -1,10 +1,11 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { Download, FileSpreadsheet } from 'lucide-react'
 import { ApplicationFilters } from '@/components/admin/application-filters'
+import { BulkApprove } from '@/components/admin/bulk-approve'
+import { ExportConfirm } from '@/components/admin/export-confirm'
 import { Badge, buttonClass, Card, CardBody, EmptyState } from '@/components/ui/primitives'
 import { can, requirePermission } from '@/lib/auth/rbac'
-import { listApplications, type ApplicationFilters as Filters } from '@/lib/admin/queries'
+import { countReviewable, listApplications, type ApplicationFilters as Filters } from '@/lib/admin/queries'
 import { STATUS_LABELS, STATUS_TONES } from '@/lib/applications/status'
 import { getChurchRegions, getCountries, getDepartments } from '@/lib/reference'
 import { formatDate, initials } from '@/lib/utils'
@@ -31,12 +32,17 @@ export default async function ApplicationsPage({
     sort: (params.sort as Filters['sort']) ?? 'newest',
   }
 
-  const [result, departments, countries, regions] = await Promise.all([
+  const [result, reviewable, departments, countries, regions] = await Promise.all([
     listApplications(user, filters),
+    can(user, 'application:decide') ? countReviewable(user, filters) : Promise.resolve(0),
     getDepartments(),
     getCountries(),
     getChurchRegions(),
   ])
+
+  // Read once for the whole page, so the compiler's purity rule holds and
+  // every row ages against the same instant.
+  const now = new Date().getTime()
 
   const exportQuery = new URLSearchParams(
     Object.entries(params).filter(([, value]) => Boolean(value)) as [string, string][],
@@ -52,24 +58,14 @@ export default async function ApplicationsPage({
           </p>
         </div>
 
-        {can(user, 'application:export') && (
-          <div className="flex flex-wrap gap-2">
-            <a
-              href={`/api/admin/export?format=csv&${exportQuery}`}
-              className={buttonClass({ variant: 'secondary', size: 'sm' })}
-            >
-              <Download aria-hidden className="size-4" />
-              Export CSV
-            </a>
-            <a
-              href={`/api/admin/export?format=xlsx&${exportQuery}`}
-              className={buttonClass({ variant: 'secondary', size: 'sm' })}
-            >
-              <FileSpreadsheet aria-hidden className="size-4" />
-              Export Excel
-            </a>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {can(user, 'application:decide') && (
+            <BulkApprove reviewableCount={reviewable} filters={params} />
+          )}
+          {can(user, 'application:export') && result.total > 0 && (
+            <ExportConfirm total={result.total} exportQuery={exportQuery} />
+          )}
+        </div>
       </div>
 
       <ApplicationFilters
@@ -98,11 +94,13 @@ export default async function ApplicationsPage({
               <thead>
                 <tr className="border-b border-line bg-surface-sunken">
                   <Th>Volunteer</Th>
-                  <Th>Registration ID</Th>
+                  <Th>MMP number</Th>
                   <Th>Department</Th>
                   <Th>Location</Th>
                   <Th>Age</Th>
                   <Th>Submitted</Th>
+                  <Th>Waiting</Th>
+                  <Th>Notes</Th>
                   <Th>Status</Th>
                 </tr>
               </thead>
@@ -139,8 +137,13 @@ export default async function ApplicationsPage({
                           </span>
                         </Link>
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-body">{item.registrationId}</td>
-                      <td className="px-4 py-3 text-body">{item.department?.name ?? '—'}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-body">
+                        {item.user.mmpCode ?? item.registrationId}
+                      </td>
+                      {/* The department chosen for the current edition. */}
+                      <td className="px-4 py-3 text-body">
+                        {item.participations[0]?.department?.name ?? '—'}
+                      </td>
                       <td className="px-4 py-3 text-body">
                         {[profile?.city, profile?.state?.name, profile?.country?.name].filter(Boolean).join(', ') || '—'}
                       </td>
@@ -148,6 +151,26 @@ export default async function ApplicationsPage({
                         {AGE_RANGES.find((a) => a.value === profile?.ageRange)?.label ?? '—'}
                       </td>
                       <td className="px-4 py-3 text-body">{formatDate(item.submittedAt)}</td>
+                      {/*
+                        Review age, for reviewable rows only. A decided
+                        application is not "waiting" however old it is.
+                      */}
+                      <td className="px-4 py-3">
+                        <ReviewAge submittedAt={item.submittedAt} status={item.status} now={now} />
+                      </td>
+                      <td className="px-4 py-3 text-body tabular-nums">
+                        {item._count.notes > 0 ? (
+                          <>
+                            {item._count.notes}
+                            <span className="sr-only">
+                              {' '}
+                              note{item._count.notes === 1 ? '' : 's'}
+                            </span>
+                          </>
+                        ) : (
+                          <span aria-hidden className="text-muted">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <Badge tone={STATUS_TONES[item.status]}>{STATUS_LABELS[item.status]}</Badge>
                       </td>
@@ -162,6 +185,35 @@ export default async function ApplicationsPage({
 
       {result.pages > 1 && <Pagination page={result.page} pages={result.pages} params={params} />}
     </div>
+  )
+}
+
+/**
+ * How long a reviewable application has waited, worded as a duration.
+ *
+ * Ages beyond a week turn amber: with no published review SLA, seven days is
+ * the point at which "in the queue" starts reading as "forgotten" to the
+ * volunteer on the other end.
+ */
+function ReviewAge({
+  submittedAt,
+  status,
+  now,
+}: {
+  submittedAt: Date | null
+  status: string
+  now: number
+}) {
+  if (!submittedAt || (status !== 'SUBMITTED' && status !== 'UNDER_REVIEW')) {
+    return <span aria-hidden className="text-muted">—</span>
+  }
+  const days = Math.floor((now - submittedAt.getTime()) / 86_400_000)
+  const label = days === 0 ? 'today' : days === 1 ? '1 day' : `${days} days`
+  return (
+    <span className={days >= 7 ? 'font-semibold text-warning' : 'text-body'}>
+      {label}
+      {days >= 7 && <span className="sr-only"> — waiting more than a week</span>}
+    </span>
   )
 }
 

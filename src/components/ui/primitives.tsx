@@ -11,17 +11,56 @@ import { cn } from '@/lib/utils'
 
 // --- Button ---------------------------------------------------------------
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'link'
+/**
+ * Button variants, ordered by visual weight.
+ *
+ * `primary` is the filled orange and carries the page's single most important
+ * action. `outline` and `outlineOnDark` are its deliberate counterweight: the
+ * same size and shape, so they read as a peer, but unfilled, so they never
+ * compete for the first glance. That filled-versus-outlined distinction is what
+ * communicates priority — colour alone would leave the hierarchy invisible to
+ * anyone who cannot separate the two hues.
+ */
+type ButtonVariant =
+  | 'primary'
+  | 'outline'
+  | 'outlineOnDark'
+  | 'secondary'
+  | 'ghost'
+  | 'danger'
+  | 'link'
 type ButtonSize = 'sm' | 'md' | 'lg'
 
 const BUTTON_BASE =
   'inline-flex items-center justify-center gap-2 rounded-pill font-display font-bold uppercase tracking-wide ' +
-  'transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-55 ' +
+  // Transform and shadow join colour so the primary action can lift on hover.
+  // Cancelled under prefers-reduced-motion by the base layer in globals.css.
+  'transition-[color,background-color,border-color,box-shadow,transform] duration-200 ease-[var(--ease-out-soft)] ' +
+  'disabled:cursor-not-allowed disabled:opacity-55 ' +
   // 44px minimum touch target on every size (WCAG 2.1 AA target size).
   'min-h-11'
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-primary text-white hover:bg-primary-hover active:bg-primary-active',
+  /**
+   * The one action a page most wants taken. Lifts 1px and gains a shadow on
+   * hover, and returns on press so the click is felt.
+   */
+  primary:
+    'bg-primary text-white shadow-[var(--shadow-card)] ' +
+    'hover:bg-primary-hover hover:shadow-[var(--shadow-raised)] ' +
+    'active:bg-primary-active active:translate-y-0 active:shadow-[var(--shadow-card)] ' +
+    'motion-safe:hover:-translate-y-px',
+
+  /** Secondary on a light surface: unfilled, warming to orange on hover. */
+  outline:
+    'border border-line-strong bg-transparent text-ink ' +
+    'hover:border-primary hover:bg-primary-subtle hover:text-primary-active',
+
+  /** Secondary over a photograph or dark panel. */
+  outlineOnDark:
+    'border border-white/60 bg-transparent text-white ' +
+    'hover:border-brand hover:bg-white/10 hover:text-brand',
+
   secondary: 'border border-ink bg-transparent text-ink hover:bg-ink hover:text-white',
   ghost: 'bg-transparent text-ink hover:bg-surface-sunken',
   danger: 'bg-danger text-white hover:brightness-90',

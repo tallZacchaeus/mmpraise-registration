@@ -98,7 +98,7 @@ export const DEPARTMENTS: DepartmentSeed[] = [
   {
     slug: 'praise-team',
     name: 'Volunteers Praise Team',
-    description: 'Singers and instrumentalists leading worship across the 84 hours.',
+    description: 'Singers and instrumentalists leading worship across the marathon.',
     capacity: 400,
     questions: [
       {

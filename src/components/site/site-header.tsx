@@ -1,9 +1,17 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
-import { ChevronDown, Menu, X } from 'lucide-react'
+import { ChevronDown, Menu } from 'lucide-react'
 import { buttonClass, Logo } from '@/components/ui/primitives'
+import {
+  Sheet,
+  SheetClose,
+  SheetCloseButton,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet'
 import { isExternal } from '@/config/site'
 import { navActions, primaryNav, type NavItem } from '@/content/navigation'
 import { cn } from '@/lib/utils'
@@ -11,72 +19,67 @@ import { cn } from '@/lib/utils'
 /**
  * Public site header.
  *
- * The mobile panel is a modal dialog: it traps focus, closes on Escape and on
- * outside click, locks background scroll, restores focus to the trigger, and
- * marks the rest of the page inert for assistive technology. Desktop submenus
- * open on hover *and* on click/keyboard, so they are not mouse-only.
+ * Two behaviours worth knowing about:
+ *
+ *  - Over a dark hero the bar starts transparent and turns solid once the page
+ *    scrolls, so the photograph is not cropped by a white band on arrival.
+ *    Pages without a dark hero leave `overlay` false and get the solid bar from
+ *    the start.
+ *  - The mobile panel is a Radix-backed Sheet. Focus trapping, scroll locking,
+ *    Escape handling, focus restoration and hiding the rest of the page from
+ *    assistive technology all come from Radix rather than being reimplemented
+ *    here — this replaced about sixty lines of bespoke code.
+ *
+ * Desktop submenus open on click and keyboard, so they are never mouse-only.
  */
-export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
+
+/**
+ * Tracks whether the page has scrolled past a threshold.
+ *
+ * `useSyncExternalStore` rather than an effect: the React Compiler forbids
+ * setting state from an effect for this, and it gives a defined server
+ * snapshot, so the first paint matches the server and the bar does not flash.
+ */
+function subscribeToScroll(onChange: () => void) {
+  window.addEventListener('scroll', onChange, { passive: true })
+  return () => window.removeEventListener('scroll', onChange)
+}
+
+function useHasScrolled(threshold = 24) {
+  return useSyncExternalStore(
+    subscribeToScroll,
+    () => window.scrollY > threshold,
+    () => false,
+  )
+}
+
+export function SiteHeader({
+  isSignedIn = false,
+  overlay = false,
+}: {
+  isSignedIn?: boolean
+  /** True when the header sits over a dark hero on this page. */
+  overlay?: boolean
+}) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
-  const panelRef = useRef<HTMLDivElement>(null)
-  const triggerRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
+  const scrolled = useHasScrolled()
 
-  // Escape closes whichever layer is open, innermost first.
+  // Transparent only while overlaying a hero and still at the top of the page.
+  const transparent = overlay && !scrolled
+
+  // Escape closes an open submenu. The Sheet handles its own.
   useEffect(() => {
+    if (!openMenu) return
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Escape') return
-      if (mobileOpen) setMobileOpen(false)
-      else if (openMenu) setOpenMenu(null)
+      if (event.key === 'Escape') setOpenMenu(null)
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [mobileOpen, openMenu])
+  }, [openMenu])
 
-  // Lock scroll, trap focus and restore it when the mobile panel closes.
-  useEffect(() => {
-    if (!mobileOpen) return
-
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-
-    const panel = panelRef.current
-    const trigger = triggerRef.current
-    const focusables = () =>
-      Array.from(
-        panel?.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      ).filter((element) => element.offsetParent !== null)
-
-    focusables()[0]?.focus()
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Tab') return
-      const items = focusables()
-      if (items.length === 0) return
-      const first = items[0]!
-      const last = items[items.length - 1]!
-
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      document.body.style.overflow = previousOverflow
-      trigger?.focus()
-    }
-  }, [mobileOpen])
-
-  // Close desktop submenus when focus or the pointer leaves the header.
+  // Close desktop submenus when the pointer goes down outside the header.
   useEffect(() => {
     if (!openMenu) return
     function onPointerDown(event: MouseEvent) {
@@ -87,10 +90,29 @@ export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
   }, [openMenu])
 
   return (
-    <header className="sticky top-0 z-40 border-b border-line bg-surface/95 backdrop-blur">
-      <div className="container-content flex items-center justify-between gap-4 py-3">
+    <header
+      data-transparent={transparent || undefined}
+      className={cn(
+        'sticky top-0 z-40 transition-[background-color,box-shadow,border-color] duration-300 motion-reduce:transition-none',
+        // No border while transparent: a 1px transparent border still occupies
+        // height, which leaves a hairline of page background above the hero.
+        transparent
+          ? 'bg-transparent'
+          : 'border-b border-line bg-surface/95 shadow-[var(--shadow-card)] backdrop-blur',
+      )}
+    >
+      <div
+        className={cn(
+          'container-content flex items-center justify-between gap-4 transition-[height] duration-300 motion-reduce:transition-none',
+          // A fixed height rather than padding: the hero offsets itself by
+          // exactly --spacing-header-overlay, and that only works if the bar is
+          // reliably that tall. The bar tightens on scroll, which reads as the
+          // page settling.
+          transparent ? 'h-header-overlay' : 'h-16',
+        )}
+      >
         <Link href="/" aria-label="MMPraise home" className="shrink-0">
-          <Logo subtitle={null} />
+          <Logo subtitle={null} inverted={transparent} />
         </Link>
 
         {/* ---------------------------------------------------------- Desktop */}
@@ -104,13 +126,23 @@ export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
                       type="button"
                       aria-expanded={openMenu === item.label}
                       aria-controls={`${panelId}-${item.label}`}
-                      onClick={() => setOpenMenu((current) => (current === item.label ? null : item.label))}
-                      className="inline-flex min-h-11 items-center gap-1.5 rounded-field px-3 py-2 text-sm font-semibold text-body hover:bg-surface-sunken"
+                      onClick={() =>
+                        setOpenMenu((current) => (current === item.label ? null : item.label))
+                      }
+                      className={cn(
+                        'inline-flex min-h-11 items-center gap-1.5 rounded-field px-3 py-2 text-sm font-semibold',
+                        transparent
+                          ? 'text-white hover:bg-white/10'
+                          : 'text-body hover:bg-surface-sunken',
+                      )}
                     >
                       {item.label}
                       <ChevronDown
                         aria-hidden
-                        className={cn('size-4 transition-transform', openMenu === item.label && 'rotate-180')}
+                        className={cn(
+                          'size-4 transition-transform motion-reduce:transition-none',
+                          openMenu === item.label && 'rotate-180',
+                        )}
                       />
                     </button>
 
@@ -121,14 +153,18 @@ export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
                       >
                         {item.children.map((child) => (
                           <li key={child.label}>
-                            <NavLeaf item={child} onNavigate={() => setOpenMenu(null)} showDescription />
+                            <NavLeaf
+                              item={child}
+                              onNavigate={() => setOpenMenu(null)}
+                              showDescription
+                            />
                           </li>
                         ))}
                       </ul>
                     )}
                   </>
                 ) : (
-                  <NavLeaf item={item} onNavigate={() => setOpenMenu(null)} />
+                  <NavLeaf item={item} onNavigate={() => setOpenMenu(null)} onDark={transparent} />
                 )}
               </li>
             ))}
@@ -137,57 +173,44 @@ export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
 
         <div className="hidden items-center gap-2 lg:flex">
           {navActions.map((action) => (
-            <ActionLink key={action.label} {...action} />
+            <ActionLink key={action.label} {...action} onDark={transparent} />
           ))}
           {isSignedIn && (
-            <Link href="/dashboard" className={buttonClass({ variant: 'ghost', size: 'sm' })}>
+            <Link
+              href="/dashboard"
+              className={buttonClass({
+                variant: 'ghost',
+                size: 'sm',
+                className: transparent ? 'text-white hover:bg-white/10' : undefined,
+              })}
+            >
               Dashboard
             </Link>
           )}
         </div>
 
         {/* ----------------------------------------------------------- Mobile */}
-        <button
-          ref={triggerRef}
-          type="button"
-          onClick={() => setMobileOpen(true)}
-          aria-expanded={mobileOpen}
-          aria-controls={panelId}
-          className="inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-field px-3 text-sm font-semibold text-ink hover:bg-surface-sunken lg:hidden"
-        >
-          <Menu aria-hidden className="size-5" />
-          Menu
-        </button>
-      </div>
-
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <button
-            type="button"
-            aria-label="Close menu"
-            tabIndex={-1}
-            onClick={() => setMobileOpen(false)}
-            className="absolute inset-0 h-full w-full cursor-default bg-night/60"
-          />
-
-          <div
-            ref={panelRef}
-            id={panelId}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Site menu"
-            className="absolute inset-y-0 right-0 flex w-full max-w-sm flex-col overflow-y-auto bg-surface shadow-[var(--shadow-overlay)]"
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetTrigger
+            className={cn(
+              'inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-field px-3 text-sm font-semibold lg:hidden',
+              transparent ? 'text-white hover:bg-white/10' : 'text-ink hover:bg-surface-sunken',
+            )}
           >
+            <Menu aria-hidden className="size-5" />
+            Menu
+          </SheetTrigger>
+
+          <SheetContent side="right" className="lg:hidden" aria-describedby={undefined}>
             <div className="flex items-center justify-between border-b border-line px-4 py-3">
-              <Logo subtitle={null} />
-              <button
-                type="button"
-                onClick={() => setMobileOpen(false)}
-                className="inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-field px-3 text-sm font-semibold text-ink hover:bg-surface-sunken"
-              >
-                <X aria-hidden className="size-5" />
-                Close
-              </button>
+              {/* The sheet needs an accessible name; the wordmark is the title. */}
+              <SheetTitle asChild>
+                <span>
+                  <Logo subtitle={null} />
+                  <span className="sr-only">Site menu</span>
+                </span>
+              </SheetTitle>
+              <SheetCloseButton />
             </div>
 
             <nav aria-label="Mobile" className="flex-1 px-4 py-4">
@@ -202,13 +225,17 @@ export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
                         <ul className="space-y-1">
                           {item.children.map((child) => (
                             <li key={child.label}>
-                              <NavLeaf item={child} onNavigate={() => setMobileOpen(false)} mobile showDescription />
+                              <SheetClose asChild>
+                                <NavLeafLink item={child} mobile showDescription />
+                              </SheetClose>
                             </li>
                           ))}
                         </ul>
                       </>
                     ) : (
-                      <NavLeaf item={item} onNavigate={() => setMobileOpen(false)} mobile />
+                      <SheetClose asChild>
+                        <NavLeafLink item={item} mobile />
+                      </SheetClose>
                     )}
                   </li>
                 ))}
@@ -220,15 +247,69 @@ export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
                 <ActionLink key={action.label} {...action} className="w-full" />
               ))}
               {isSignedIn && (
-                <Link href="/dashboard" className={buttonClass({ variant: 'ghost', className: 'w-full' })}>
+                <Link
+                  href="/dashboard"
+                  className={buttonClass({ variant: 'ghost', className: 'w-full' })}
+                >
                   Dashboard
                 </Link>
               )}
             </div>
-          </div>
-        </div>
-      )}
+          </SheetContent>
+        </Sheet>
+      </div>
     </header>
+  )
+}
+
+const leafClass = (mobile: boolean) =>
+  cn(
+    'flex min-h-11 flex-col justify-center rounded-field px-3 py-2 text-sm font-semibold',
+    mobile && 'text-base',
+  )
+
+/**
+ * A leaf rendered inside the Sheet.
+ *
+ * Split out from `NavLeaf` because `SheetClose asChild` needs to forward its
+ * props onto exactly one child element, and it must be able to do so whether
+ * the item is a link or inert text.
+ */
+function NavLeafLink({
+  item,
+  mobile = false,
+  showDescription = false,
+  ...props
+}: {
+  item: NavItem
+  mobile?: boolean
+  showDescription?: boolean
+}) {
+  if (!item.href || item.comingSoon) {
+    return (
+      <span className={cn(leafClass(mobile), 'cursor-default text-muted')} {...props}>
+        {item.label}
+        <span className="text-xs font-normal text-muted">Coming soon</span>
+      </span>
+    )
+  }
+
+  const external = isExternal(item.href)
+  return (
+    <Link
+      href={item.href}
+      {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+      className={cn(leafClass(mobile), 'text-body hover:bg-surface-sunken')}
+      {...props}
+    >
+      <span>
+        {item.label}
+        {external && <span className="sr-only"> (opens in a new tab)</span>}
+      </span>
+      {showDescription && item.description && (
+        <span className="text-xs font-normal text-muted">{item.description}</span>
+      )}
+    </Link>
   )
 }
 
@@ -236,26 +317,25 @@ export function SiteHeader({ isSignedIn = false }: { isSignedIn?: boolean }) {
 function NavLeaf({
   item,
   onNavigate,
-  mobile = false,
   showDescription = false,
+  onDark = false,
 }: {
   item: NavItem
   onNavigate?: () => void
-  mobile?: boolean
   /** Descriptions are useful inside a dropdown, but make the top bar too tall. */
   showDescription?: boolean
+  onDark?: boolean
 }) {
-  const base = cn(
-    'flex min-h-11 flex-col justify-center rounded-field px-3 py-2 text-sm font-semibold hover:bg-surface-sunken',
-    mobile && 'text-base',
-  )
+  const base = leafClass(false)
 
   // Items with no destination yet are announced as such instead of linking to "#".
   if (!item.href || item.comingSoon) {
     return (
-      <span className={cn(base, 'cursor-default text-muted hover:bg-transparent')}>
+      <span className={cn(base, 'cursor-default', onDark ? 'text-white/80' : 'text-muted')}>
         {item.label}
-        <span className="text-xs font-normal text-muted">Coming soon</span>
+        <span className={cn('text-xs font-normal', onDark ? 'text-white/80' : 'text-muted')}>
+          Coming soon
+        </span>
       </span>
     )
   }
@@ -267,7 +347,10 @@ function NavLeaf({
       href={item.href}
       onClick={onNavigate}
       {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-      className={cn(base, 'text-body')}
+      className={cn(
+        base,
+        onDark ? 'text-white hover:bg-white/10' : 'text-body hover:bg-surface-sunken',
+      )}
     >
       <span>
         {item.label}
@@ -285,18 +368,31 @@ function ActionLink({
   href,
   variant,
   className,
+  onDark = false,
 }: {
   label: string
   href: string
   variant: 'primary' | 'secondary'
   className?: string
+  onDark?: boolean
 }) {
   const external = isExternal(href)
   return (
     <Link
       href={href}
       {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
-      className={buttonClass({ variant, size: 'sm', className })}
+      className={buttonClass({
+        variant,
+        size: 'sm',
+        className: cn(
+          // A pale secondary button vanishes on a transparent bar, so over the
+          // hero it becomes a white outline instead.
+          onDark &&
+            variant === 'secondary' &&
+            'bg-transparent text-white ring-1 ring-inset ring-white/60 hover:bg-white/10',
+          className,
+        ),
+      })}
     >
       {label}
       {external && <span className="sr-only"> (opens in a new tab)</span>}

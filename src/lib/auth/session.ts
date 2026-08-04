@@ -16,6 +16,19 @@ export type SessionUser = {
   firstName: string | null
   lastName: string | null
   photoDocumentId: string | null
+
+  /**
+   * Per-administrator additions to, and withdrawals from, the role defaults.
+   *
+   * Loaded with the session so `can()` stays synchronous — it is called dozens
+   * of times per render, and an async permission check would either become a
+   * per-call query or a cache nobody remembers to invalidate.
+   */
+  permissionOverrides: { permission: string; granted: boolean }[]
+  /** Administrative access withdrawn indefinitely. */
+  adminDisabledAt: Date | null
+  /** Administrative access withdrawn until this moment, then restored. */
+  adminSuspendedUntil: Date | null
 }
 
 const COOKIE = env.SESSION_COOKIE_NAME
@@ -84,6 +97,7 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
         include: {
           roles: true,
           departmentScopes: { select: { departmentId: true } },
+          permissionGrants: { select: { permission: true, granted: true } },
           profile: { select: { firstName: true, lastName: true, photoDocumentId: true } },
         },
       },
@@ -103,6 +117,12 @@ export const getSessionUser = cache(async (): Promise<SessionUser | null> => {
     firstName: session.user.profile?.firstName ?? null,
     lastName: session.user.profile?.lastName ?? null,
     photoDocumentId: session.user.profile?.photoDocumentId ?? null,
+    permissionOverrides: session.user.permissionGrants.map((g) => ({
+      permission: g.permission,
+      granted: g.granted,
+    })),
+    adminDisabledAt: session.user.adminDisabledAt,
+    adminSuspendedUntil: session.user.adminSuspendedUntil,
   }
 })
 

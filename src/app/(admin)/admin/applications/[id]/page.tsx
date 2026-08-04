@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import { ArrowLeft, FileText, Paperclip } from 'lucide-react'
 import { HealthPanel, NotesPanel, StatusPanel } from '@/components/admin/review-panel'
 import { Badge, buttonClass, Card, CardBody, CardHeader } from '@/components/ui/primitives'
+import { eventConfig } from '@/config/site'
 import { can, requirePermission } from '@/lib/auth/rbac'
 import { getApplicationForReview } from '@/lib/admin/queries'
 import { STATUS_LABELS, STATUS_TONES } from '@/lib/applications/status'
@@ -20,10 +21,24 @@ export default async function ApplicationDetailPage({ params }: { params: Promis
   if (!application) notFound()
 
   const profile = application.user.profile
-  const answers = [...application.answers].sort((a, b) => a.question.sortOrder - b.question.sortOrder)
 
-  const dates = [...new Set(application.availability.map((a) => a.date.toISOString().slice(0, 10)))].sort()
-  const periods = [...new Set(application.availability.map((a) => a.period))]
+  /*
+   * The review reads the *current* edition's participation — department,
+   * answers, availability, shifts are all per-edition facts now. The query
+   * orders participations newest-edition-first, so [0] is the one under
+   * review; earlier editions remain in the array as history.
+   */
+  const participation =
+    application.participations.find((row) => row.edition === eventConfig.edition) ??
+    application.participations[0] ??
+    null
+
+  const answers = [...(participation?.answers ?? [])].sort(
+    (a, b) => a.question.sortOrder - b.question.sortOrder,
+  )
+  const availability = participation?.availability ?? []
+  const dates = [...new Set(availability.map((a) => a.date.toISOString().slice(0, 10)))].sort()
+  const periods = [...new Set(availability.map((a) => a.period))]
 
   return (
     <div className="space-y-6">
@@ -57,7 +72,8 @@ export default async function ApplicationDetailPage({ params }: { params: Promis
                 {profile?.firstName} {profile?.lastName}
               </h1>
               <p className="text-sm text-muted">
-                {application.registrationId} · {application.department?.name ?? 'No department'}
+                {application.user.mmpCode ?? application.registrationId} ·{' '}
+                {participation?.department?.name ?? 'No department'}
               </p>
             </div>
           </div>
@@ -132,7 +148,7 @@ export default async function ApplicationDetailPage({ params }: { params: Promis
           <Card>
             <CardHeader
               title="Department answers"
-              description={application.department?.name ?? 'No department selected'}
+              description={participation?.department?.name ?? 'No department selected'}
             />
             <CardBody>
               {answers.length === 0 ? (
@@ -182,7 +198,11 @@ export default async function ApplicationDetailPage({ params }: { params: Promis
                   {
                     label: 'Overnight',
                     value:
-                      application.availableOvernight === null ? '—' : application.availableOvernight ? 'Yes' : 'No',
+                      participation?.availableOvernight == null
+                        ? '—'
+                        : participation.availableOvernight
+                          ? 'Yes'
+                          : 'No',
                   },
                   {
                     label: 'Emergency contact',

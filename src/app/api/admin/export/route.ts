@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { eventConfig } from '@/config/site'
 import { db } from '@/lib/db'
 import { audit } from '@/lib/audit'
 import { getSessionUser } from '@/lib/auth/session'
@@ -38,6 +39,9 @@ function csvEscape(value: unknown): string {
 }
 
 const COLUMNS = [
+  // The volunteer's permanent number leads, because it is the one they quote
+  // and the one that joins this export to any other record of them.
+  'MMP number',
   'Registration ID',
   'Status',
   'Submitted',
@@ -89,12 +93,20 @@ export async function GET(request: Request) {
     orderBy: { submittedAt: 'desc' },
     take: MAX_ROWS,
     include: {
-      department: { select: { name: true } },
+      participations: {
+        where: { edition: eventConfig.edition },
+        select: {
+          availableOvernight: true,
+          status: true,
+          department: { select: { name: true } },
+        },
+      },
       emergency: true,
       user: {
         select: {
           email: true,
           phone: true,
+          mmpCode: true,
           profile: {
             include: {
               country: { select: { name: true } },
@@ -120,7 +132,10 @@ export async function GET(request: Request) {
 
   const rows = applications.map((application) => {
     const profile = application.user.profile
+    // At most one row: `(applicationId, edition)` is unique.
+    const participation = application.participations[0]
     return [
+      application.user.mmpCode ?? '',
       application.registrationId,
       STATUS_LABELS[application.status],
       application.submittedAt ? formatDate(application.submittedAt) : '',
@@ -143,8 +158,12 @@ export async function GET(request: Request) {
       profile?.region?.name ?? '',
       profile?.province?.name ?? '',
       profile?.parish?.name ?? profile?.parishNameOther ?? profile?.churchName ?? '',
-      application.department?.name ?? '',
-      application.availableOvernight === null ? '' : application.availableOvernight ? 'Yes' : 'No',
+      participation?.department?.name ?? '',
+      participation?.availableOvernight == null
+        ? ''
+        : participation.availableOvernight
+          ? 'Yes'
+          : 'No',
       application.emergency ? `${application.emergency.name} (${application.emergency.relationship})` : '',
       application.emergency?.phone ?? '',
       application.discoverySource === 'other'

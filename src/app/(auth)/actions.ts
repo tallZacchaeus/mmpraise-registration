@@ -11,6 +11,9 @@ import { identifierKey, ipKey, rateLimit } from '@/lib/security/rate-limit'
 import { sendMailSafely } from '@/lib/mail/mailer'
 import { passwordResetEmail, verificationEmail } from '@/lib/mail/templates'
 import { suggestUsername } from '@/lib/validation/common'
+import { usernameSchema } from '@/lib/validation/common'
+import { parseMmpCode } from '@/lib/volunteer/mmp-code'
+import { nextMmpCode } from '@/lib/volunteer/allocate-mmp-code'
 import {
   changePasswordSchema,
   forgotPasswordSchema,
@@ -109,6 +112,11 @@ export async function signUpAction(input: unknown): Promise<ActionResult<{ redir
       email,
       username,
       passwordHash: await hashPassword(password),
+      // Allocated here, not at submission: the MMP number identifies the
+      // person, so it exists from the moment the person does. Someone who
+      // signs up and finishes their registration next week still has one
+      // number, and it is the same number.
+      mmpCode: await nextMmpCode(),
       roles: { create: [{ role: 'VOLUNTEER' }] },
       profile: { create: { firstName, lastName } },
     },
@@ -128,9 +136,19 @@ export async function signInAction(input: unknown): Promise<ActionResult<{ redir
   if (!parsed.ok) return parsed.result
   const { identifier, password, redirectTo } = parsed.data
 
+  /*
+   * Canonicalise before rate limiting.
+   *
+   * `MMP2214059`, `mmp 2214059` and `2214059` are the same account, so they
+   * must share one bucket — otherwise an attacker gets the full allowance
+   * again for every way of writing the same number, and a dense sequential
+   * identifier is exactly what somebody would try to walk.
+   */
+  const canonical = parseMmpCode(identifier) ?? identifier
+
   const byIp = await rateLimit(await ipKey('signin'), env.RATE_LIMIT_LOGIN_MAX * 4, env.RATE_LIMIT_LOGIN_WINDOW_MIN)
   const byIdentifier = await rateLimit(
-    identifierKey('signin', identifier),
+    identifierKey('signin', canonical),
     env.RATE_LIMIT_LOGIN_MAX,
     env.RATE_LIMIT_LOGIN_WINDOW_MIN,
   )
@@ -140,14 +158,37 @@ export async function signInAction(input: unknown): Promise<ActionResult<{ redir
     return fail(`Too many sign-in attempts. Please try again in ${wait} minute${wait === 1 ? '' : 's'}.`, undefined, 'rate_limited')
   }
 
+  /*
+   * Email, username, or the volunteer's MMP number.
+   *
+   * The MMP number is what 13,969 migrated volunteers actually know — many will
+   * have forgotten which address they registered with four years ago, and the
+   * number is on everything the organisation has ever handed them.
+   *
+   * `parseMmpCode` returns null for anything that is not a plausible code, so
+   * an ordinary email or username never reaches the third branch and cannot
+   * accidentally match one.
+   */
+  const mmpCode = parseMmpCode(identifier)
+
   const user = await db.user.findFirst({
-    where: { OR: [{ email: identifier }, { username: identifier }] },
+    where: {
+      OR: [
+        { email: identifier },
+        { username: identifier },
+        ...(mmpCode ? [{ mmpCode }] : []),
+      ],
+    },
     include: { profile: { select: { firstName: true } } },
   })
 
   // Identical response whether the account exists or the password is wrong, so
   // the form cannot be used to enumerate registered addresses.
-  const genericFailure = fail('Incorrect email/username or password', undefined, 'invalid_credentials')
+  const genericFailure = fail(
+    'Incorrect email, username, MMP number or password',
+    undefined,
+    'invalid_credentials',
+  )
 
   if (!user) {
     await audit({ action: 'auth.login_failed', entityType: 'User', metadata: { identifier, reason: 'no_such_user' } })
@@ -291,13 +332,43 @@ export async function resetPasswordAction(input: unknown): Promise<ActionResult>
     return fail('This reset link is no longer valid. Request a new one.', undefined, 'invalid_token')
   }
 
+  const user = await db.user.findUnique({
+    where: { id: record.userId },
+    select: { id: true, emailVerifiedAt: true, isPreviousEditionUser: true },
+  })
+  if (!user) return fail('This reset link is no longer valid. Request a new one.', undefined, 'invalid_token')
+
+  const passwordHash = await hashPassword(password)
+
   await db.$transaction([
     db.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
     db.user.update({
       where: { id: record.userId },
-      data: { passwordHash: await hashPassword(password), failedLogins: 0, lockedUntil: null },
+      data: {
+        passwordHash,
+        failedLogins: 0,
+        lockedUntil: null,
+        /**
+         * Completing a reset proves control of the mailbox, which is exactly
+         * what verification means — so a migrated account becomes verified
+         * here and nowhere else. Appearing in an imported spreadsheet never
+         * verifies anybody.
+         */
+        emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
+      },
     }),
   ])
+
+  // Record activation against the migration record, if this was a migrated
+  // account. Best-effort: a reporting write must never fail a password reset.
+  if (user.isPreviousEditionUser) {
+    await db.migratedUserRecord
+      .updateMany({
+        where: { matchedUserId: user.id, activatedAt: null },
+        data: { activatedAt: new Date(), invitationStatus: 'SUPPRESSED' },
+      })
+      .catch((error) => console.error('[migration] could not record activation', error))
+  }
 
   // Any session opened with the old password is no longer trustworthy.
   await destroyAllSessions(record.userId)
@@ -327,4 +398,49 @@ export async function changePasswordAction(input: unknown): Promise<ActionResult
 
   await audit({ action: 'auth.password_changed', entityType: 'User', entityId: user.id, actorId: user.id })
   return ok()
+}
+
+/**
+ * Is this username free?
+ *
+ * Used by the sign-up form to give live feedback instead of failing only on
+ * submit. Two deliberate constraints:
+ *
+ *  - Rate limited per IP. The endpoint confirms whether a username exists,
+ *    which is a user-enumeration surface. Every large product with a live
+ *    username check accepts that trade — the mitigation is to make bulk
+ *    harvesting impractical, not to remove the feature and make everyone find
+ *    out their username is taken only after filling the whole form.
+ *  - Returns alternatives rather than only a verdict, so a rejection always
+ *    comes with a way forward.
+ */
+export async function checkUsernameAction(
+  raw: unknown,
+): Promise<ActionResult<{ available: boolean; suggestions: string[] }>> {
+  const limit = await rateLimit(await ipKey('username-check'), 60, 10)
+  if (!limit.allowed) {
+    return fail('Too many checks. Please try again shortly.', undefined, 'rate_limited')
+  }
+
+  const parsed = usernameSchema.safeParse(raw)
+  // An invalid username is not "taken" — the field's own validation reports
+  // why, and a second contradictory message would only confuse.
+  if (!parsed.success) return ok({ available: false, suggestions: [] })
+
+  const username = parsed.data.toLowerCase()
+  const existing = await db.user.findUnique({ where: { username }, select: { id: true } })
+  if (!existing) return ok({ available: true, suggestions: [] })
+
+  // Offer the first few free variants rather than making the applicant guess.
+  const candidates = [1, 2, 3, 7, 9].map((n) => `${username}${n}`.slice(0, 30))
+  const taken = await db.user.findMany({
+    where: { username: { in: candidates } },
+    select: { username: true },
+  })
+  const takenSet = new Set(taken.map((row) => row.username))
+
+  return ok({
+    available: false,
+    suggestions: candidates.filter((c) => !takenSet.has(c)).slice(0, 3),
+  })
 }

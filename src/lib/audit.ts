@@ -38,6 +38,27 @@ export type AuditAction =
   | 'user.role_changed'
   | 'user.deletion_requested'
 
+  /*
+   * Previous-edition migration.
+   *
+   * Every one of these is security-sensitive: a batch is a list of thousands of
+   * people's personal details, an import creates accounts, and an invitation
+   * run emails all of them. They are named individually rather than folded into
+   * a generic "migration.updated" so the Activity Log can say what actually
+   * happened without anyone having to read the metadata.
+   */
+  | 'migration.batch_created'
+  | 'migration.batch_validated'
+  | 'migration.row_created'
+  | 'migration.row_matched'
+  | 'migration.import_queued'
+  | 'migration.batch_cancelled'
+  | 'migration.rows_retried'
+  | 'migration.invitations_queued'
+  | 'migration.invitations_sent'
+  | 'migration.exported'
+  | 'migration.upload_purged'
+
 export async function audit(params: {
   action: AuditAction
   entityType: string

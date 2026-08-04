@@ -30,32 +30,54 @@ export const siteConfig = {
   locale: 'en_NG',
 } as const
 
+/**
+ * The current edition — the single source of truth.
+ *
+ * Every page, email, export and structured-data node reads the duration, year,
+ * start time and venue from here. Nothing restates them: the "84 Hours … 2026"
+ * that used to greet people on the login page came from a second copy of this
+ * information living in the database, and one copy is the only way that cannot
+ * happen again.
+ */
 export const eventConfig = {
-  /**
-   * The duration increases by one hour each year: the 2026 edition ran for 84
-   * hours, so 2027 is 85.
-   */
+  /** The duration increases by one hour each year: 2026 ran 84, 2027 runs 85. */
   durationHours: Number(env('NEXT_PUBLIC_EVENT_DURATION_HOURS', '85')),
 
   edition: env('NEXT_PUBLIC_EVENT_EDITION', '2027'),
 
+  /** "85 Hours Marathon Messiah's Praise" — the edition's own name. */
+  get editionName(): string {
+    return `${this.durationHours} Hours ${siteConfig.name}`
+  },
+
+  /** "85 Hours · 2027 edition" — the compact badge form. */
+  get editionLabel(): string {
+    return `${this.durationHours} Hours · ${this.edition} edition`
+  },
+
   /**
-   * ISO 8601 with timezone, or null while the date is still to be announced.
+   * Confirmed start: Monday 1 March 2027, 02:00 West Africa Time.
    *
-   * The 2027 date is not yet confirmed, so this is intentionally unset: the
-   * countdown, the event facts and the structured data all switch to a
-   * "date to be announced" state rather than showing a date nobody has agreed.
-   * Set NEXT_PUBLIC_EVENT_STARTS_AT once it is confirmed and every one of those
-   * places updates automatically.
+   * Stored as ISO 8601 **with its offset**. Parsing "March 1, 2027 2:00 AM"
+   * would be interpreted in the reader's own timezone, so someone in London
+   * would see a different start than someone in Lagos — the offset is what
+   * makes the instant unambiguous.
    */
-  startsAt: optionalEnv('NEXT_PUBLIC_EVENT_STARTS_AT'),
+  startsAt: env('NEXT_PUBLIC_EVENT_STARTS_AT', '2027-03-01T02:00:00+01:00'),
+
+  /** Authoritative for every displayed date and time, whatever the visitor's. */
+  timezone: 'Africa/Lagos',
+  timezoneLabel: 'WAT',
 
   /** Derived from startsAt + durationHours unless overridden. */
   endsAtOverride: optionalEnv('NEXT_PUBLIC_EVENT_ENDS_AT'),
 
   venue: {
     name: env('NEXT_PUBLIC_EVENT_VENUE', 'RCCG Prayer Foyer, New Arena'),
-    address: env('NEXT_PUBLIC_EVENT_VENUE_ADDRESS', '3km by 3km, Redemption City, Nigeria'),
+    address: env('NEXT_PUBLIC_EVENT_VENUE_ADDRESS', 'Redemption City, Nigeria'),
+    city: 'Redemption City',
+    country: 'Nigeria',
+    fullAddress: 'RCCG Prayer Foyer, New Arena, Redemption City, Nigeria',
     mapUrl: env(
       'NEXT_PUBLIC_EVENT_MAP_URL',
       'https://maps.google.com/?q=RCCG+Redemption+City+Prayer+Foyer',
@@ -92,6 +114,11 @@ export const links = {
   shareTestimony: '/#share-testimony',
 
   // Gated behind launch flags.
+  /**
+   * A route in this application, not the old WordPress page — so it opens in
+   * the same tab and carries the same header, footer and design system.
+   */
+  about: destination('about', env('NEXT_PUBLIC_ABOUT_URL', '/about')),
   donation: destination('give', env('NEXT_PUBLIC_DONATION_URL', 'https://mmpraise.org/donate/')),
   livestream: destination(
     'livestream',
@@ -100,27 +127,57 @@ export const links = {
   youtube: destination('livestream', env('NEXT_PUBLIC_YOUTUBE_URL', 'https://www.youtube.com/@themmpraise')),
   radio: destination('radio', optionalEnv('NEXT_PUBLIC_RADIO_URL')),
   magazine: destination('magazine', optionalEnv('NEXT_PUBLIC_MAGAZINE_URL')),
-  about: destination('about', env('NEXT_PUBLIC_ABOUT_URL', 'https://mmpraise.org/about-us/')),
   blog: destination('blog', env('NEXT_PUBLIC_BLOG_URL', 'https://mmpraise.org/blog/')),
   gallery: destination('gallery', env('NEXT_PUBLIC_GALLERY_URL', 'https://mmpraise.org/gallery/')),
   prayerRequest: destination(
     'prayerRequest',
     env('NEXT_PUBLIC_PRAYER_REQUEST_URL', 'https://mmpraise.org/prayer-request/'),
   ),
-  contact: destination('contact', env('NEXT_PUBLIC_CONTACT_URL', 'https://mmpraise.org/contact-us/')),
+  /** A route in this application, not the old WordPress page. */
+  contact: destination('contact', env('NEXT_PUBLIC_CONTACT_URL', '/contact')),
 } as const
 
+/**
+ * The single source of contact detail for every page.
+ *
+ * The current site contradicts itself: the contact page publishes a real
+ * telephone number and a Redemption Camp address, while the footer on the very
+ * same page publishes the placeholder "+234 XXX-XXXX-XXX" and a Lagos HQ
+ * address. The real number is used everywhere here, and the two addresses are
+ * modelled as what they appear to be — a place to visit and a postal HQ —
+ * rather than one silently overwriting the other.
+ *
+ * TODO(verify): confirm the postal address, and whether the Lagos HQ is still
+ * current. See docs/CONTACT-AUDIT.md.
+ */
 export const contact = {
   email: env('NEXT_PUBLIC_CONTACT_EMAIL', 'info@mmpraise.org'),
-  /**
-   * Rendered only when set. The current site publishes the literal placeholder
-   * "+234 XXX-XXXX-XXX", which is not carried over.
-   */
-  phone: optionalEnv('NEXT_PUBLIC_CONTACT_PHONE'),
+
+  /** Published on the contact page of the current site. */
+  phone: optionalEnv('NEXT_PUBLIC_CONTACT_PHONE') ?? '+234 703 385 3817',
+
+  /** Postal / organisational address, as published in the footer. */
   address: env('NEXT_PUBLIC_CONTACT_ADDRESS', 'Marathon Messiah’s Praise HQ, Lagos, Nigeria'),
-  addressMapUrl:
-    'https://maps.google.com/?q=Marathon+Messiah%27s+Praise+HQ,+Lagos,+Nigeria',
+  addressMapUrl: 'https://maps.google.com/?q=Marathon+Messiah%27s+Praise+HQ,+Lagos,+Nigeria',
+
+  /** Where visitors are told to come, as published on the contact page. */
+  visitAddress: env(
+    'NEXT_PUBLIC_VISIT_ADDRESS',
+    'MMPraise, Redemption Camp, Ogun State, Nigeria',
+  ),
+  visitMapUrl: env(
+    'NEXT_PUBLIC_VISIT_MAP_URL',
+    'https://maps.google.com/?q=Redemption+Camp,+Ogun+State,+Nigeria',
+  ),
 } as const
+
+/**
+ * A telephone number in E.164, for `tel:` links and structured data. Display
+ * keeps the spaced form, which is easier to read and to dictate.
+ */
+export function phoneHref(value: string): string {
+  return `tel:${value.replace(/[^\d+]/g, '')}`
+}
 
 /**
  * Social profiles. The current footer lists these networks as plain text with no
@@ -157,7 +214,100 @@ export function eventEndsAt(): Date | null {
   return new Date(start.getTime() + eventConfig.durationHours * 3_600_000)
 }
 
+/**
+ * Where the event stands at a given instant.
+ *
+ * The same four states the countdown uses, derived from a `Date` the caller
+ * supplies rather than from the clock — so a Server Component can decide what
+ * to say without pulling in the client-side ticker, and a test can drive it to
+ * any point in the event's life.
+ */
+export function eventStateAt(now: Date): 'unscheduled' | 'upcoming' | 'live' | 'completed' {
+  const start = eventStartsAt()
+  const end = eventEndsAt()
+  if (!start || !end) return 'unscheduled'
+  if (now.getTime() >= end.getTime()) return 'completed'
+  if (now.getTime() >= start.getTime()) return 'live'
+  return 'upcoming'
+}
+
+/**
+ * Whole days from `now` to the first hour of praise, or null while the date is
+ * unconfirmed. Never negative — once the event has begun there are none left.
+ */
+export function daysUntilEventAt(now: Date): number | null {
+  const start = eventStartsAt()
+  if (!start) return null
+  const diff = start.getTime() - now.getTime()
+  if (diff <= 0) return 0
+  return Math.ceil(diff / 86_400_000)
+}
+
 /** True when a URL leaves this application. */
 export function isExternal(href: string): boolean {
   return /^https?:\/\//i.test(href)
+}
+
+/**
+ * Event date and time formatting.
+ *
+ * Every one of these pins `timeZone` to Africa/Lagos. Without it the same
+ * instant renders as 2:00 AM in Lagos and 1:00 AM in London, and a volunteer
+ * abroad would arrive an hour early — the event begins at 2:00 AM WAT for
+ * everyone, wherever they are reading.
+ */
+const LOCALE = 'en-GB'
+
+/** "Monday, 1 March 2027" */
+export function formatEventDateLong(date: Date): string {
+  return new Intl.DateTimeFormat(LOCALE, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: eventConfig.timezone,
+  }).format(date)
+}
+
+/** "1 March 2027" */
+export function formatEventDate(date: Date): string {
+  return new Intl.DateTimeFormat(LOCALE, {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: eventConfig.timezone,
+  }).format(date)
+}
+
+/** "2:00 AM WAT" */
+export function formatEventTime(date: Date): string {
+  const time = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: eventConfig.timezone,
+  }).format(date)
+  return `${time} ${eventConfig.timezoneLabel}`
+}
+
+/** "1 March 2027 · 2:00 AM WAT" */
+export function formatEventDateTime(date: Date): string {
+  return `${formatEventDate(date)} · ${formatEventTime(date)}`
+}
+
+/**
+ * The full sentence a screen reader hears, and the fallback anyone sees before
+ * the countdown has initialised. "West Africa Time" is spelled out because
+ * "WAT" is read as a word rather than as an abbreviation.
+ */
+export function eventSummarySentence(): string {
+  const start = eventStartsAt()
+  if (!start) return `The ${eventConfig.editionName} date will be announced soon.`
+  const time = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: eventConfig.timezone,
+  }).format(start)
+  return `The ${eventConfig.editionName} begins on ${formatEventDateLong(start)} at ${time} West Africa Time.`
 }

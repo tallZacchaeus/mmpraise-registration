@@ -1,5 +1,6 @@
 import 'server-only'
 import { cache } from 'react'
+import { eventConfig } from '@/config/site'
 import { db } from '@/lib/db'
 
 /**
@@ -19,7 +20,15 @@ export type SettingsMap = {
 const DEFAULTS: SettingsMap = {
   registration_open: true,
   registration_closed_message: 'Volunteer registration is currently closed. Please check back soon.',
-  event_name: "84 Hours Marathon Messiah's Praise",
+  /**
+   * Derived from eventConfig rather than written out again.
+   *
+   * A second, hand-typed copy of the edition name is exactly how the login page
+   * came to greet people with "84 Hours … 2026" long after the site had moved
+   * on. An administrator can still override this row in Admin → Settings; the
+   * default simply can no longer go stale on its own.
+   */
+  event_name: `${eventConfig.editionName} ${eventConfig.edition}`,
   event_dates: [],
   support_email: 'volunteers@mmpraise.org',
   minor_age_ranges: ['AGE_00_15'],

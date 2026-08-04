@@ -3,8 +3,9 @@
 The ordered checklist for the first launch. `docs/DEPLOYMENT.md` explains how deployment works in
 general; this is what to actually type.
 
-**What the first release opens:** the homepage and the registration journey. Every other public
-destination says "Coming soon" — see *Launch scope* in `docs/DEPLOYMENT.md`.
+**What the first release opens:** the homepage, the About page, the Contact page and the
+registration journey. Every other public destination says "Coming soon" — see *Launch scope* in
+`docs/DEPLOYMENT.md`.
 
 You already have the database, the file storage and the SMTP provider, so this is mostly
 configuration and one `docker compose` command.
@@ -180,6 +181,8 @@ certificates. **Test a restore before the event, not after an incident.**
 - [ ] The event name and edition are correct in **Admin → Settings**
 - [ ] A database backup has been taken **and a restore tested**
 - [ ] Someone owns the **Admin → Testimonies** moderation queue
+- [ ] Someone owns the **Admin → Messages** inbox — contact messages are stored, not emailed onward
+- [ ] A message sent from `/contact` appears in `/admin/messages`
 
 ---
 

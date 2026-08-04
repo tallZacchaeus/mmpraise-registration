@@ -31,6 +31,15 @@ export const PERMISSIONS = [
   'settings:manage',
   'user:manage',
   'audit:view',
+
+  // Previous-edition migration. Deliberately separate from the general admin
+  // permissions: an import reads thousands of people's personal details and
+  // can email all of them, so it is granted explicitly, never by default.
+  'migration:view',
+  'migration:create',
+  'migration:execute',
+  'migration:invite',
+  'migration:export',
 ] as const
 
 export type Permission = (typeof PERMISSIONS)[number]
@@ -56,6 +65,9 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'reference:manage',
     'settings:manage',
     'audit:view',
+    // View only. Creating, running and emailing a migration are granted
+    // explicitly to the people who do that work.
+    'migration:view',
   ],
 
   // Sees only applications for departments they are scoped to.
@@ -91,14 +103,83 @@ export function permissionsFor(roles: Role[]): Set<Permission> {
   return set
 }
 
-export function can(user: Pick<SessionUser, 'roles'> | null, permission: Permission): boolean {
-  if (!user) return false
-  return permissionsFor(user.roles).has(permission)
+/**
+ * The effective policy: role defaults, then per-administrator overrides.
+ *
+ * Overrides are applied *after* roles and can revoke as well as grant, which is
+ * what lets one reviewer be given export rights, or one department head have
+ * theirs withdrawn, without inventing a role that exists for a single person
+ * and is never maintained afterwards.
+ *
+ * Pure, and takes the grants as an argument, so the same rule is used by the
+ * session loader, by a permission-matrix preview and by the tests.
+ */
+export function effectivePermissions(
+  roles: Role[],
+  overrides: { permission: string; granted: boolean }[] = [],
+): Set<Permission> {
+  const set = permissionsFor(roles)
+  for (const override of overrides) {
+    // Ignore anything that is no longer a known permission — a renamed key must
+    // never silently grant something adjacent.
+    if (!(PERMISSIONS as readonly string[]).includes(override.permission)) continue
+    const permission = override.permission as Permission
+    if (override.granted) set.add(permission)
+    else set.delete(permission)
+  }
+  return set
 }
 
-export function isAdmin(user: Pick<SessionUser, 'roles'> | null): boolean {
+/**
+ * Is administrative access currently withdrawn?
+ *
+ * Distinct from `isActive`, which disables the whole account. A suspended
+ * administrator keeps their volunteer application and their dashboard; they
+ * simply cannot act as an administrator until the suspension lapses or is
+ * lifted.
+ */
+export function adminAccessSuspended(
+  user: Pick<SessionUser, 'adminDisabledAt' | 'adminSuspendedUntil'> | null,
+  now: Date = new Date(),
+): boolean {
+  if (!user) return true
+  if (user.adminDisabledAt) return true
+  if (user.adminSuspendedUntil && user.adminSuspendedUntil.getTime() > now.getTime()) return true
+  return false
+}
+
+export function can(
+  user: Pick<SessionUser, 'roles' | 'permissionOverrides' | 'adminDisabledAt' | 'adminSuspendedUntil'> | null,
+  permission: Permission,
+): boolean {
   if (!user) return false
+
+  /*
+   * A suspended administrator keeps only what a volunteer has. Checking here
+   * rather than at each call site means a route added later cannot forget it —
+   * `can` is the single gate every page and action already goes through.
+   */
+  if (adminAccessSuspended(user)) {
+    return permissionsFor(['VOLUNTEER']).has(permission)
+  }
+
+  return effectivePermissions(user.roles, user.permissionOverrides ?? []).has(permission)
+}
+
+export function isAdmin(
+  user: Pick<SessionUser, 'roles' | 'adminDisabledAt' | 'adminSuspendedUntil'> | null,
+): boolean {
+  if (!user) return false
+  if (adminAccessSuspended(user)) return false
   return user.roles.some((role) => role !== 'VOLUNTEER')
+}
+
+/** True when the roles exist but access is currently withdrawn. */
+export function isSuspendedAdmin(
+  user: Pick<SessionUser, 'roles' | 'adminDisabledAt' | 'adminSuspendedUntil'> | null,
+): boolean {
+  if (!user) return false
+  return user.roles.some((role) => role !== 'VOLUNTEER') && adminAccessSuspended(user)
 }
 
 /**

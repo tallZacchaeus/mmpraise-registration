@@ -133,3 +133,45 @@ export function suggestUsername(firstName: string, lastName: string, suffix?: nu
   const safeBase = base.length >= 4 ? base : `mmp.${base}`.slice(0, 24)
   return suffix ? `${safeBase}${suffix}`.slice(0, 30) : safeBase
 }
+
+/**
+ * A strong password the applicant can accept instead of inventing one.
+ *
+ * Built from `crypto.getRandomValues`, never `Math.random` — the latter is not
+ * cryptographically random and must never generate a credential. One character
+ * is taken from each required class first, so the result always satisfies every
+ * rule, then the remainder is filled and the whole thing shuffled so the
+ * classes do not appear in a predictable order.
+ */
+export function generatePassword(length = 18): string {
+  const lower = 'abcdefghijkmnopqrstuvwxyz'
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+  const digits = '23456789'
+  const symbols = '!@#$%^&*-_=+?'
+  const all = lower + upper + digits + symbols
+
+  const pick = (set: string, count: number) => {
+    const bytes = new Uint32Array(count)
+    crypto.getRandomValues(bytes)
+    return Array.from(bytes, (n) => set[n % set.length]!)
+  }
+
+  const chars = [
+    ...pick(lower, 1),
+    ...pick(upper, 1),
+    ...pick(digits, 1),
+    ...pick(symbols, 1),
+    ...pick(all, Math.max(0, length - 4)),
+  ]
+
+  // Fisher-Yates with cryptographic randomness, so the guaranteed characters
+  // are not always in positions 0-3.
+  const order = new Uint32Array(chars.length)
+  crypto.getRandomValues(order)
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = order[i]! % (i + 1)
+    ;[chars[i], chars[j]] = [chars[j]!, chars[i]!]
+  }
+
+  return chars.join('')
+}

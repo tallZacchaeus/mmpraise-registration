@@ -28,6 +28,16 @@ export default defineConfig({
     setupFiles: ['tests/setup.ts'],
     testTimeout: 30_000,
     hookTimeout: 60_000,
+    /**
+     * One test file at a time.
+     *
+     * Every integration file shares a single TEST_DATABASE_URL and truncates
+     * the volunteer tables between tests. Run in parallel, one file wipes
+     * another's fixtures mid-assertion and the failures look like foreign-key
+     * bugs in the application. The unit tests take about a second in total, so
+     * serialising costs almost nothing and removes a whole class of flakiness.
+     */
+    fileParallelism: false,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

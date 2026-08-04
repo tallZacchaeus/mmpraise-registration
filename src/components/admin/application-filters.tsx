@@ -99,7 +99,7 @@ export function ApplicationFilters({
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Name, email, phone or registration ID"
+              placeholder="Name, email, phone or MMP number"
               className="min-h-11 w-full rounded-field border border-line-strong bg-surface pl-9 pr-3 text-base text-body placeholder:text-muted/70 focus:border-primary"
             />
           </div>

@@ -167,8 +167,8 @@ export default async function WizardStepPage({ params }: { params: Promise<{ ste
 
       case 'department': {
         const departments = await getDepartmentsWithLoad()
-        const questions = state.application.departmentId
-          ? await getDepartmentQuestions(state.application.departmentId)
+        const questions = state.participation.departmentId
+          ? await getDepartmentQuestions(state.participation.departmentId)
           : []
 
         return (
@@ -176,7 +176,7 @@ export default async function WizardStepPage({ params }: { params: Promise<{ ste
             departments={departments}
             initialQuestions={questions}
             initialAnswers={state.answers}
-            initialValues={merge({ departmentId: state.application.departmentId ?? '' }, 'department')}
+            initialValues={merge({ departmentId: state.participation.departmentId ?? '' }, 'department')}
           />
         )
       }
@@ -193,7 +193,7 @@ export default async function WizardStepPage({ params }: { params: Promise<{ ste
               {
                 availableDates: dates,
                 preferredPeriods: periods,
-                availableOvernight: state.application.availableOvernight,
+                availableOvernight: state.participation.availableOvernight,
                 emergencyName: state.emergency?.name ?? '',
                 emergencyRelationship: state.emergency?.relationship ?? '',
                 emergencyPhone: state.emergency?.phone ?? '',

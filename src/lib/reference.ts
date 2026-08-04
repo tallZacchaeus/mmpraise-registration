@@ -1,4 +1,5 @@
 import 'server-only'
+import { eventConfig } from '@/config/site'
 import { cache } from 'react'
 import { db } from '@/lib/db'
 import type { LookupCategory } from '@/generated/prisma/enums'
@@ -74,13 +75,23 @@ export const getDepartments = cache(async () =>
   }),
 )
 
-/** Departments with the number of non-draft applications, for capacity display. */
+/**
+ * Departments with the number of volunteers taking part this edition.
+ *
+ * Distribution only — **never** a capacity check. There is no fixed limit on
+ * volunteers per department, so nothing here may close a department, mark one
+ * full, or block an application because a count has been reached. The figure
+ * exists so administrators can see where people are going, and for no other
+ * purpose.
+ *
+ * Counted from participations, because a department is a per-edition choice.
+ */
 export const getDepartmentsWithLoad = cache(async () => {
   const [departments, counts] = await Promise.all([
     getDepartments(),
-    db.volunteerApplication.groupBy({
+    db.editionParticipation.groupBy({
       by: ['departmentId'],
-      where: { status: { not: 'DRAFT' } },
+      where: { edition: eventConfig.edition, application: { status: { not: 'DRAFT' } } },
       _count: { _all: true },
     }),
   ])
@@ -89,7 +100,6 @@ export const getDepartmentsWithLoad = cache(async () => {
   return departments.map((department) => ({
     ...department,
     applied: byId.get(department.id) ?? 0,
-    isFull: department.capacity ? (byId.get(department.id) ?? 0) >= department.capacity : false,
   }))
 })
 

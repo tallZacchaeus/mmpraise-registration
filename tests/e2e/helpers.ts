@@ -38,7 +38,7 @@ export async function signUp(page: Page, volunteer: ReturnType<typeof newVolunte
   await page.locator('#signup-password').fill(volunteer.password)
   await page.locator('#signup-confirmPassword').fill(volunteer.password)
   await page.locator('form input[type="checkbox"]').first().check()
-  await page.getByRole('button', { name: /create account/i }).click()
+  await page.getByRole('button', { name: /continue to volunteer registration/i }).click()
   // Server Action redirects navigate client-side, so no `load` event fires —
   // assert on the URL rather than waiting for a navigation lifecycle event.
   await expect(page).toHaveURL(/\/apply\/personal/, { timeout: 30_000 })

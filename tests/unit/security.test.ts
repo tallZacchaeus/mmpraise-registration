@@ -4,18 +4,10 @@ import { generateToken, hashToken, tokensMatch } from '@/lib/auth/tokens'
 import { can, isAdmin, departmentScope, permissionsFor } from '@/lib/auth/rbac'
 import { sniffMimeType } from '@/lib/files'
 import type { SessionUser } from '@/lib/auth/session'
+import { sessionUser } from '../helpers/session'
 
-const user = (roles: SessionUser['roles'], departmentScopes: string[] = []): SessionUser => ({
-  id: 'u1',
-  email: 'a@b.co',
-  username: 'a',
-  roles,
-  emailVerified: true,
-  departmentScopes,
-  firstName: null,
-  lastName: null,
-  photoDocumentId: null,
-})
+const user = (roles: SessionUser['roles'], departmentScopes: string[] = []): SessionUser =>
+  sessionUser({ roles, departmentScopes })
 
 describe('password hashing', () => {
   it('verifies a correct password and rejects a wrong one', async () => {

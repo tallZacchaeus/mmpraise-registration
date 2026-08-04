@@ -38,6 +38,13 @@
   --color-cream: #fef1e4;
   --color-night: #140b06; /* dark sections */
 
+  /* Worship accent — used sparingly, for moments that should feel set apart:
+     the countdown, the global-reach statement, the featured testimony. Never
+     for body text: #8a6a12 is the AA-passing shade for anything readable. */
+  --color-gold: #c9a227;
+  --color-gold-deep: #8a6a12; /* 4.83:1 on white */
+  --color-gold-subtle: #fbf4e0;
+
   /* Status colours — each paired with an accessible text shade */
   --color-success: #0f7a3d;
   --color-success-subtle: #e8f6ee;
@@ -68,6 +75,11 @@
   --radius-lg: 0.875rem;
   --radius-xl: 1.25rem;
 
+  /* Header height while transparent over a hero. The hero pulls itself up by
+     exactly this much so the photograph runs behind the bar; defining it once
+     is what stops the two drifting apart and leaving a sliver of background. */
+  --spacing-header-overlay: 5.5rem;
+
   /* Container widths */
   --container-prose: 44rem;
   --container-content: 72rem;
@@ -79,6 +91,62 @@
   --duration-fast: 120ms;
   --duration-base: 200ms;
   --duration-slow: 320ms;
+
+  /* Keyframes for the Radix-driven components. Radix toggles data-state, these
+     turn that into movement. All are cancelled by the reduced-motion rule. */
+  --animate-fade-in: fade-in var(--duration-base) var(--ease-out-soft);
+  --animate-fade-out: fade-out var(--duration-fast) ease-in;
+  --animate-scale-in: scale-in var(--duration-base) var(--ease-out-soft);
+  --animate-accordion-down: accordion-down var(--duration-base) var(--ease-out-soft);
+  --animate-accordion-up: accordion-up var(--duration-base) var(--ease-out-soft);
+  --animate-slide-in-right: slide-in-right var(--duration-slow) var(--ease-out-soft);
+  --animate-slide-out-right: slide-out-right var(--duration-base) ease-in;
+  --animate-slide-in-left: slide-in-left var(--duration-slow) var(--ease-out-soft);
+  --animate-slide-out-left: slide-out-left var(--duration-base) ease-in;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes fade-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+  /*
+   * Animates `scale`, never `transform`. The dialog centres itself with the
+   * separate `translate` property, and a keyframe that also writes a
+   * translate() composes with it — the element renders a full extra half-size
+   * off-screen for the duration of the animation. One property per job:
+   * position belongs to the element, the entrance only scales and fades.
+   */
+  @keyframes scale-in {
+    from { opacity: 0; scale: 0.97; }
+    to { opacity: 1; scale: 1; }
+  }
+  @keyframes accordion-down {
+    from { height: 0; }
+    to { height: var(--radix-accordion-content-height); }
+  }
+  @keyframes accordion-up {
+    from { height: var(--radix-accordion-content-height); }
+    to { height: 0; }
+  }
+  @keyframes slide-in-right {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+  @keyframes slide-out-right {
+    from { transform: translateX(0); }
+    to { transform: translateX(100%); }
+  }
+  @keyframes slide-in-left {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(0); }
+  }
+  @keyframes slide-out-left {
+    from { transform: translateX(0); }
+    to { transform: translateX(-100%); }
+  }
 
   /* Breakpoints, named so they can be referenced in comments and docs.
      Tailwind's defaults are kept; these document the tested set:
@@ -159,6 +227,36 @@
     .container-content {
       padding-inline: 1.5rem;
     }
+  }
+
+  /*
+   * Card lift. A card that responds to the pointer reads as interactive; the
+   * movement is 2px, which is felt more than seen. Removed under reduced
+   * motion by the base-layer rule, and never applied on touch, where there is
+   * no hover to speak of.
+   */
+  .card-lift {
+    transition:
+      transform var(--duration-base) var(--ease-out-soft),
+      box-shadow var(--duration-base) var(--ease-out-soft);
+  }
+  @media (hover: hover) {
+    .card-lift:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-raised);
+    }
+  }
+
+  /*
+   * Atmospheric texture for dark hero surfaces. A very low-opacity dot lattice
+   * that stops a large flat black area looking like a rendering fault. It is a
+   * repeating dot pattern rather than a colour ramp — the "no gradients" rule
+   * above is about decorative colour transitions, not about texture — and it
+   * costs no image request.
+   */
+  .texture-grain {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+    background-size: 3px 3px;
   }
 
   /* Gentle entrance used sparingly on section headings. Disabled entirely for

@@ -65,6 +65,28 @@ describe('design token contrast', () => {
     expect(contrast(WHITE, token('night'))).toBeGreaterThanOrEqual(4.5)
   })
 
+  it('keeps interactive text readable on the sunken surface, not only on white', () => {
+    /*
+     * --color-primary is 4.70:1 on white but only 4.40:1 on --color-surface-sunken,
+     * so it fails AA the moment it is placed on a tinted card. Anything
+     * interactive on that surface must use --color-primary-active.
+     */
+    expect(contrast(token('primary'), token('surface-sunken'))).toBeLessThan(4.5)
+    expect(contrast(token('primary-active'), token('surface-sunken'))).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('the worship gold is readable on the dark sections it is used on', () => {
+    // Countdown labels, the reach figures and the featured testimony all put
+    // --color-gold on --color-night.
+    expect(contrast(token('gold'), token('night'))).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('keeps a separate gold shade for anything on white', () => {
+    // The bright gold is decorative only — it fails badly on white, which is
+    // why --color-gold-deep exists for text on light surfaces.
+    expect(contrast(token('gold-deep'), WHITE)).toBeGreaterThanOrEqual(4.5)
+  })
+
   it('section eyebrow labels meet AA on the tinted background', () => {
     // 14px text, so the 4.5:1 threshold applies rather than the large-text 3:1.
     expect(contrast(token('primary-active'), token('primary-subtle'))).toBeGreaterThanOrEqual(4.5)

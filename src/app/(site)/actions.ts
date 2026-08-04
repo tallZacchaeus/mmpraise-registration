@@ -116,3 +116,73 @@ export async function subscribeAction(input: unknown): Promise<ActionResult> {
 
   return ok()
 }
+
+const contactSchema = z.object({
+  category: z.enum([
+    'GENERAL',
+    'EVENT_INFORMATION',
+    'REGISTRATION_SUPPORT',
+    'VOLUNTEER',
+    'MEDIA',
+    'PARTNERSHIP',
+    'DONATION',
+    'OTHER',
+  ]),
+  name: nameSchema,
+  email: emailSchema,
+  phone: z.string().max(30).optional().or(z.literal('')),
+  subject: trimmedText(150).pipe(z.string().min(3, 'Enter a short subject')),
+  message: multilineText(4000).pipe(
+    z.string().min(20, 'Please tell us a little more (at least 20 characters)'),
+  ),
+  website: honeypot,
+})
+
+/**
+ * A message from the public contact page.
+ *
+ * Stored rather than forwarded by email so nothing is lost if mail delivery
+ * fails, and so the team has a record of what was asked. Messages are never
+ * rendered publicly — the admin inbox is the only way to read one.
+ */
+export async function submitContactAction(input: unknown): Promise<ActionResult> {
+  const limit = await rateLimit(await ipKey('contact'), 5, 60)
+  if (!limit.allowed) {
+    return fail(
+      `You have sent us several messages recently. Please try again in ${Math.ceil(limit.retryAfterSeconds / 60)} minutes.`,
+      undefined,
+      'rate_limited',
+    )
+  }
+
+  const parsed = parseOrFail(contactSchema, input)
+  if (!parsed.ok) return parsed.result
+
+  // Silently accept honeypot hits so bots get no signal, but store nothing.
+  if (parsed.data.website) return ok()
+
+  const headerList = await headers()
+
+  const created = await db.contactMessage.create({
+    data: {
+      category: parsed.data.category,
+      name: parsed.data.name,
+      email: parsed.data.email,
+      phone: parsed.data.phone || null,
+      subject: parsed.data.subject,
+      message: parsed.data.message,
+      status: 'NEW',
+      ip: clientIp(headerList),
+      userAgent: headerList.get('user-agent')?.slice(0, 500) ?? null,
+    },
+  })
+
+  await audit({
+    action: 'application.note_added',
+    entityType: 'ContactMessage',
+    entityId: created.id,
+    metadata: { category: parsed.data.category },
+  })
+
+  return ok()
+}

@@ -109,8 +109,11 @@ export const participationActions: ParticipationAction[] = [
     id: 'testimony',
     title: 'Share a testimony',
     body: 'Tell us what God has done, and encourage someone else.',
-    outcome: 'Jumps to the form below. Testimonies are reviewed before publication.',
-    href: '#share-testimony',
+    outcome: 'Takes you to the form. Testimonies are reviewed before publication.',
+    // Root-relative, not a bare "#share-testimony": this list is rendered on the
+    // About page too, where a bare fragment would point at an anchor that does
+    // not exist there. From the homepage it still resolves to the same section.
+    href: links.shareTestimony,
     icon: 'quote',
   },
 ]
@@ -170,9 +173,13 @@ export const globalReach = {
     height: 357,
   },
   /**
-   * TODO(verify): the graphic itself still reads "80 Countries" while the prose
-   * says 82 nations. The alt text describes what the image shows rather than
-   * repeating the prose figure.
+   * TODO(verify): the graphic reads "80 Countries" while the prose says 82
+   * nations, and the About page states 50. The alt text describes what the
+   * image shows rather than repeating any of the three disputed figures.
+   *
+   * Note: this file and beyond-mmpraise-flyer.webp were swapped during the
+   * original migration, so this section rendered the flyer under map alt text
+   * until the names were corrected.
    */
   alt: 'World map with markers across Africa, Europe, Asia, Australia and the Americas showing where worshippers join Marathon Messiah’s Praise',
 } as const

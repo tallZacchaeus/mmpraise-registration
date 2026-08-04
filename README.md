@@ -1,6 +1,6 @@
 # MMPraise Volunteer Registration
 
-A production-oriented volunteer registration platform for the **84 Hours Marathon Messiah's Praise**.
+A production-oriented volunteer registration platform for the **85 Hours Marathon Messiah's Praise 2027**.
 It replaces the long single-page form with an accessible eight-step wizard, a department-specific
 question engine that administrators can change without a deployment, a volunteer dashboard, and a
 role-based administration area.
@@ -97,15 +97,18 @@ validation drift.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the system is put together and why
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, backups, monitoring
 - [docs/TESTING.md](docs/TESTING.md) — what is tested automatically and what must be checked by hand
+- [docs/HOMEPAGE-AUDIT.md](docs/HOMEPAGE-AUDIT.md) — what the WordPress homepage got wrong and how it was fixed
+- [docs/ABOUT-AUDIT.md](docs/ABOUT-AUDIT.md) — the same, for the About page
+- [docs/CONTACT-AUDIT.md](docs/CONTACT-AUDIT.md) — the same, for the Contact page
 - [MMPRAISE-DESIGN-REFERENCE.md](MMPRAISE-DESIGN-REFERENCE.md) — the brand tokens taken from mmpraise.org
 
 ---
 
 ## What is live in the first release
 
-The homepage and the registration journey. Every other public destination — About, Blog, Gallery,
-Magazine, Radio, Prayer Request, Contact and **Give** — renders as "Coming soon" until its flag is
-switched on. Each is one `NEXT_PUBLIC_FEATURE_*` variable; see `src/config/features.ts` and the
+The homepage, the About page, the Contact page and the registration journey. Every other public
+destination — Blog, Gallery, Magazine, Radio, Prayer Request and **Give** — renders as "Coming soon"
+until its flag is switched on. Each is one `NEXT_PUBLIC_FEATURE_*` variable; see `src/config/features.ts` and the
 *Launch scope* table in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 Note that **donations are off**, which disables a live revenue path from the current site. Set

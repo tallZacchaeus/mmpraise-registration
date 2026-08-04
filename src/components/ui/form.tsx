@@ -1,9 +1,10 @@
 'use client'
 
 import { useId, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
-import { AlertCircle, Check, Eye, EyeOff } from 'lucide-react'
+import { AlertCircle, Check, Eye, EyeOff, Wand2 } from 'lucide-react'
+import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
-import { PASSWORD_RULES, passwordStrength } from '@/lib/validation/common'
+import { PASSWORD_RULES, generatePassword, passwordStrength } from '@/lib/validation/common'
 
 /**
  * Accessible form controls.
@@ -394,6 +395,7 @@ export function PasswordInput({
   id,
   invalid,
   showMeter = false,
+  showGenerate = false,
   autoComplete = 'new-password',
   ...props
 }: Omit<ComponentPropsWithoutRef<'input'>, 'onChange' | 'value' | 'type'> & {
@@ -401,10 +403,23 @@ export function PasswordInput({
   onChange: (value: string) => void
   invalid?: boolean
   showMeter?: boolean
+  /** Offers a generated password. Only for fields that set a new one. */
+  showGenerate?: boolean
 }) {
   const [visible, setVisible] = useState(false)
+  const [capsLock, setCapsLock] = useState(false)
   const strength = passwordStrength(value)
   const meterId = useId()
+
+  /**
+   * Caps Lock is the single most common cause of a password that "worked
+   * yesterday" failing today, and the field masks the evidence. `getModifierState`
+   * only reports reliably during a key event, so it is read on keyboard
+   * interaction rather than polled.
+   */
+  function readCapsLock(event: React.KeyboardEvent<HTMLInputElement>) {
+    setCapsLock(event.getModifierState?.('CapsLock') ?? false)
+  }
 
   return (
     <div>
@@ -416,6 +431,9 @@ export function PasswordInput({
           value={value}
           autoComplete={autoComplete}
           onChange={(e) => onChange(e.target.value)}
+          onKeyUp={readCapsLock}
+          onKeyDown={readCapsLock}
+          onBlur={() => setCapsLock(false)}
           aria-invalid={invalid || undefined}
           aria-describedby={showMeter ? meterId : props['aria-describedby']}
           className={cn(CONTROL, CONTROL_STATE(invalid), 'pr-12')}
@@ -423,7 +441,7 @@ export function PasswordInput({
         <button
           type="button"
           onClick={() => setVisible((v) => !v)}
-          className="absolute right-1 top-1/2 flex size-10 -translate-y-1/2 items-center justify-center rounded-field text-muted hover:text-ink"
+          className="absolute right-1 top-1/2 flex size-10 -translate-y-1/2 items-center justify-center rounded-field text-muted transition-colors hover:text-ink motion-reduce:transition-none"
           aria-pressed={visible}
           aria-label={visible ? 'Hide password' : 'Show password'}
         >
@@ -431,30 +449,52 @@ export function PasswordInput({
         </button>
       </div>
 
+      {capsLock && (
+        <p role="status" className="mt-2 flex items-center gap-1.5 text-xs font-medium text-warning">
+          <AlertCircle aria-hidden className="size-4 shrink-0" />
+          Caps Lock is on.
+        </p>
+      )}
+
+      {showGenerate && (
+        <button
+          type="button"
+          onClick={() => {
+            onChange(generatePassword())
+            // Revealing it is the point: an applicant cannot save a password
+            // they have never seen.
+            setVisible(true)
+          }}
+          className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-primary underline underline-offset-4 hover:text-primary-hover"
+        >
+          <Wand2 aria-hidden className="size-3.5" />
+          Generate a secure password
+        </button>
+      )}
+
       {showMeter && (
         <div id={meterId} className="mt-3">
-          <div className="flex items-center gap-2">
-            <div className="flex h-1.5 flex-1 gap-1" aria-hidden>
-              {[0, 1, 2, 3].map((i) => (
-                <span
-                  key={i}
-                  className={cn(
-                    'flex-1 rounded-pill',
-                    value && strength.score > i
-                      ? strength.score <= 1
-                        ? 'bg-danger'
-                        : strength.score === 2
-                          ? 'bg-warning'
-                          : 'bg-success'
-                      : 'bg-line',
-                  )}
-                />
-              ))}
-            </div>
-            <span className="text-xs font-medium text-muted" aria-live="polite">
-              Password strength: {strength.label}
+          <div className="flex items-center gap-3">
+            {/* One bar that grows, rather than four blocks that pop on: the
+                width transition makes improvement legible as you type. */}
+            <Progress
+              value={value ? strength.score : 0}
+              max={4}
+              label="Password strength"
+              className="flex-1"
+              barClassName={
+                strength.score <= 1 ? 'bg-danger' : strength.score === 2 ? 'bg-warning' : 'bg-success'
+              }
+            />
+            <span className="w-24 shrink-0 text-right text-xs font-medium text-muted">
+              {strength.label}
             </span>
           </div>
+          {/* Announced on a delay-free polite channel, so a screen-reader user
+              is told the strength changed without the bar being readable. */}
+          <p className="sr-only" aria-live="polite">
+            Password strength: {strength.label}
+          </p>
 
           <ul className="mt-2 grid gap-1 sm:grid-cols-2">
             {PASSWORD_RULES.map((rule) => {
@@ -464,13 +504,18 @@ export function PasswordInput({
                   <span
                     aria-hidden
                     className={cn(
-                      'flex size-4 shrink-0 items-center justify-center rounded-full border',
+                      'flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors duration-300 motion-reduce:transition-none',
                       met ? 'border-success bg-success text-white' : 'border-line-strong text-transparent',
                     )}
                   >
                     <Check className="size-3" />
                   </span>
-                  <span className={met ? 'text-success' : 'text-muted'}>
+                  <span
+                    className={cn(
+                      'transition-colors duration-300 motion-reduce:transition-none',
+                      met ? 'text-success' : 'text-muted',
+                    )}
+                  >
                     {rule.label}
                     <span className="sr-only">{met ? ' — met' : ' — not met'}</span>
                   </span>

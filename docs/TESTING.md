@@ -126,4 +126,30 @@ Restart the server before a run you intend to trust:
 pkill -f "next dev"; npx playwright test
 ```
 
-The same suite passes 72/72 on a fresh server.
+The same suite passes on a fresh server.
+
+## The suite shares your development server
+
+It cannot have its own. Next 16 refuses to start a second `next dev` for the
+same project directory — *"Another next dev server is already running"* —
+whatever port you give it, so `reuseExistingServer` must stay `true`.
+
+That has one consequence that surprises people: **if no server is running when
+you start a test run, Playwright starts one and stops it again when the run
+finishes.** The server then appears to have "kept stopping" on its own. It did
+not; the test run owned it and tore it down.
+
+Start your own server first and it survives the run untouched:
+
+```bash
+npm run dev
+```
+
+To keep the suite entirely away from it, point it somewhere else instead:
+
+```bash
+E2E_BASE_URL=http://localhost:3000 npx playwright test
+```
+
+With `E2E_BASE_URL` set, Playwright manages no server at all — it only connects
+to the one you named.

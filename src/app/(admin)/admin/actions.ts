@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
+import { eventConfig } from '@/config/site'
 import { db } from '@/lib/db'
 import { env } from '@/lib/env'
 import { audit } from '@/lib/audit'
@@ -22,15 +23,36 @@ import type { ApplicationStatus } from '@/generated/prisma/enums'
  * that the target application belongs to a department they administer.
  */
 
-/** Confirm the actor may act on this application; returns it or an error. */
+/**
+ * Confirm the actor may act on this application; returns it or null.
+ *
+ * Scoping reads the current edition's participation, because department is a
+ * per-edition choice. The participation rides along in the result so shift
+ * actions do not have to fetch it again.
+ */
 async function loadScopedApplication(userScope: string[] | null, applicationId: string) {
   const application = await db.volunteerApplication.findUnique({
     where: { id: applicationId },
-    select: { id: true, status: true, departmentId: true, registrationId: true },
+    select: {
+      id: true,
+      status: true,
+      registrationId: true,
+      participations: {
+        where: { edition: eventConfig.edition },
+        select: { id: true, departmentId: true, status: true },
+      },
+    },
   })
   if (!application || application.status === 'DRAFT') return null
-  if (userScope !== null && (!application.departmentId || !userScope.includes(application.departmentId))) return null
-  return application
+
+  const participation = application.participations[0] ?? null
+  if (
+    userScope !== null &&
+    (!participation?.departmentId || !userScope.includes(participation.departmentId))
+  ) {
+    return null
+  }
+  return { ...application, participation }
 }
 
 // --- Status transitions ---------------------------------------------------
@@ -92,8 +114,11 @@ export async function changeStatusAction(input: unknown): Promise<ActionResult> 
       where: { id: applicationId },
       select: {
         registrationId: true,
-        department: { select: { name: true } },
-        user: { select: { email: true, profile: { select: { firstName: true } } } },
+        participations: {
+          where: { edition: eventConfig.edition },
+          select: { department: { select: { name: true } } },
+        },
+        user: { select: { email: true, mmpCode: true, profile: { select: { firstName: true } } } },
       },
     })
 
@@ -101,9 +126,10 @@ export async function changeStatusAction(input: unknown): Promise<ActionResult> 
       // Health information is never referenced in status emails.
       const message = statusChangeEmail({
         name: record.user.profile?.firstName ?? 'there',
-        registrationId: record.registrationId,
+        // The number the volunteer knows, not the internal reference.
+        registrationId: record.user.mmpCode ?? record.registrationId,
         status: STATUS_LABELS[status as ApplicationStatus],
-        department: record.department?.name ?? 'Unassigned',
+        department: record.participations[0]?.department?.name ?? 'Unassigned',
         message: reason?.trim() || null,
         loginUrl: `${env.APP_URL}/dashboard`,
       })
@@ -198,18 +224,34 @@ export async function assignShiftAction(input: unknown): Promise<ActionResult> {
     return fail(`${shift.name} is already full`)
   }
 
+  // A shift belongs to an edition, so the assignment hangs off the
+  // participation — there must be one before a shift can be given.
+  if (!application.participation) {
+    return fail('This volunteer has not signed up for the current edition yet')
+  }
+
   const existing = await db.shiftAssignment.findUnique({
-    where: { shiftId_applicationId: { shiftId: shift.id, applicationId: application.id } },
+    where: {
+      shiftId_participationId: { shiftId: shift.id, participationId: application.participation.id },
+    },
   })
   if (existing) return fail('This volunteer is already assigned to that shift')
 
   await db.shiftAssignment.create({
-    data: { shiftId: shift.id, applicationId: application.id, assignedById: user.id },
+    data: {
+      shiftId: shift.id,
+      participationId: application.participation.id,
+      assignedById: user.id,
+    },
   })
 
-  // Assigning a shift implies the volunteer is on the team.
-  if (application.status === 'APPROVED') {
-    await transitionStatus({ applicationId: application.id, to: 'ASSIGNED', actorId: user.id })
+  // Being given a shift moves this edition's participation forward. Approval
+  // itself is untouched — it was granted once and stays granted.
+  if (application.participation.status === 'SIGNED_UP') {
+    await db.editionParticipation.update({
+      where: { id: application.participation.id },
+      data: { status: 'ASSIGNED' },
+    })
   }
 
   await audit({
@@ -228,15 +270,18 @@ export async function removeShiftAssignmentAction(assignmentId: string): Promise
   const user = await requirePermission('application:assign_shift')
   const assignment = await db.shiftAssignment.findUnique({
     where: { id: assignmentId },
-    select: { applicationId: true },
+    select: { participation: { select: { applicationId: true } } },
   })
   if (!assignment) return fail('Assignment not found')
 
-  const application = await loadScopedApplication(departmentScope(user), assignment.applicationId)
+  const application = await loadScopedApplication(
+    departmentScope(user),
+    assignment.participation.applicationId,
+  )
   if (!application) return fail('Application not found')
 
   await db.shiftAssignment.delete({ where: { id: assignmentId } })
-  revalidatePath(`/admin/applications/${assignment.applicationId}`)
+  revalidatePath(`/admin/applications/${application.id}`)
   return ok()
 }
 
@@ -438,4 +483,147 @@ export async function moderateTestimonyAction(input: unknown): Promise<ActionRes
   revalidatePath('/admin/testimonies')
   revalidatePath('/')
   return ok()
+}
+
+const contactTriageSchema = z.object({
+  id: z.string().min(1),
+  status: z.enum(['NEW', 'IN_PROGRESS', 'RESOLVED']),
+  note: z.string().max(500).optional(),
+})
+
+/** Move a contact message through triage and record who dealt with it. */
+export async function triageContactMessageAction(input: unknown): Promise<ActionResult> {
+  const user = await requirePermission('application:review')
+  const parsed = parseOrFail(contactTriageSchema, input)
+  if (!parsed.ok) return parsed.result
+
+  const message = await db.contactMessage.findUnique({
+    where: { id: parsed.data.id },
+    select: { id: true, status: true },
+  })
+  if (!message) return fail('Message not found')
+
+  await db.contactMessage.update({
+    where: { id: message.id },
+    data: {
+      status: parsed.data.status,
+      handlerNote: parsed.data.note?.trim() || null,
+      handledById: user.id,
+      handledAt: new Date(),
+    },
+  })
+
+  await audit({
+    action: 'application.note_added',
+    entityType: 'ContactMessage',
+    entityId: message.id,
+    actorId: user.id,
+    metadata: { from: message.status, to: parsed.data.status },
+  })
+
+  revalidatePath('/admin/messages')
+  return ok()
+}
+
+// --- Bulk approval ----------------------------------------------------------
+
+const bulkApproveSchema = z.object({
+  /** The list filters at the moment the button was pressed. */
+  filters: z.object({
+    q: z.string().optional(),
+    status: z.string().optional(),
+    departmentId: z.string().optional(),
+    countryId: z.string().optional(),
+    churchRegionId: z.string().optional(),
+    ageRange: z.string().optional(),
+  }),
+  /**
+   * What the administrator saw when they confirmed. The action re-counts and
+   * refuses if the queue changed underneath them — approving "the 133 I just
+   * read" must never silently become approving 190.
+   */
+  expectedCount: z.number().int().min(1),
+  reason: z.string().trim().max(500).optional(),
+})
+
+/** Per invocation. Keeps one request comfortably inside a timeout. */
+const BULK_APPROVE_LIMIT = 500
+
+/**
+ * Approve every reviewable application matching the current filters.
+ *
+ * Exists because approval is a one-time judgement about a person: with 13,969
+ * returning volunteers plus new registrants, one-at-a-time approval is not an
+ * interface, it is a punishment. Three properties hold:
+ *
+ *  1. **Only SUBMITTED and UNDER_REVIEW rows are touched.** A filter that
+ *     happens to include rejected or approved applications cannot flip them.
+ *  2. **The count is a contract.** The dialog showed a number; if the matching
+ *     set has changed since, the action refuses and the administrator looks
+ *     again.
+ *  3. **One status-history row and one audit record per volunteer.** A single
+ *     "approved 4,902 volunteers" line is unauditable afterwards — each
+ *     decision must be traceable on its own application.
+ */
+export async function bulkApproveAction(
+  input: unknown,
+): Promise<ActionResult<{ approved: number; remaining: number }>> {
+  const user = await requirePermission('application:decide')
+
+  const parsed = parseOrFail(bulkApproveSchema, input)
+  if (!parsed.ok) return parsed.result
+  const { filters, expectedCount, reason } = parsed.data
+
+  const { buildWhere } = await import('@/lib/admin/queries')
+  const where = {
+    AND: [
+      buildWhere(user, filters),
+      // The narrowing that makes the operation safe whatever the filter says.
+      { status: { in: ['SUBMITTED', 'UNDER_REVIEW'] as ApplicationStatus[] } },
+    ],
+  }
+
+  const matching = await db.volunteerApplication.count({ where })
+  if (matching === 0) {
+    return fail('Nothing in this view is awaiting review.')
+  }
+  if (matching !== expectedCount) {
+    return fail(
+      `This view now matches ${matching} reviewable application${matching === 1 ? '' : 's'}, not the ${expectedCount} you confirmed. Nothing was changed — check the list and try again.`,
+      undefined,
+      'count_changed',
+    )
+  }
+
+  const batch = await db.volunteerApplication.findMany({
+    where,
+    select: { id: true },
+    orderBy: { submittedAt: 'asc' },
+    take: BULK_APPROVE_LIMIT,
+  })
+
+  let approved = 0
+  for (const application of batch) {
+    // transitionStatus writes the application update and its history row in one
+    // transaction, so a crash mid-batch leaves whole decisions, never halves.
+    await transitionStatus({
+      applicationId: application.id,
+      to: 'APPROVED',
+      actorId: user.id,
+      reason: reason?.trim() || null,
+    })
+    await audit({
+      action: 'application.status_changed',
+      entityType: 'VolunteerApplication',
+      entityId: application.id,
+      actorId: user.id,
+      metadata: { to: 'APPROVED', bulk: true, batchSize: batch.length },
+    })
+    approved += 1
+  }
+
+  revalidatePath('/admin/applications')
+  revalidatePath('/admin')
+
+  return ok({ approved, remaining: matching - approved })
 }

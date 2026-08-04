@@ -35,7 +35,12 @@ export function SignInForm({ redirectTo }: { redirectTo?: string }) {
     <form onSubmit={onSubmit} noValidate className="space-y-5">
       {error && <Alert tone="danger" title="Could not sign you in">{error}</Alert>}
 
-      <Field label="Email address or username" htmlFor="identifier" required>
+      <Field
+        label="Email address, username or MMP number"
+        htmlFor="identifier"
+        required
+        help="Your MMP number looks like MMP2214059. It is on anything MMPraise has sent you."
+      >
         <TextInput
           id="identifier"
           name="identifier"

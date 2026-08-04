@@ -43,6 +43,24 @@ export default defineConfig({
     },
   ],
 
+  /*
+   * The suite shares the development server on port 3000.
+   *
+   * It cannot have its own: Next 16 refuses to start a second `next dev` for
+   * the same project directory — "Another next dev server is already running" —
+   * whatever port you give it. So `reuseExistingServer` must stay true, and a
+   * run attaches to whatever is already on 3000.
+   *
+   * Two consequences worth knowing:
+   *
+   *  - If nothing is running, Playwright starts a server and **stops it again**
+   *    when the run finishes. Start your own first if you want it to survive.
+   *  - A dev server that has been up for hours degrades: the same suite takes
+   *    7.7 minutes against a stale one and 2.3 against a fresh one, and steps
+   *    that make several database round trips start exceeding the assertion
+   *    timeout. Those failures look like product bugs and are not. Restart
+   *    before a run you intend to trust — see docs/TESTING.md.
+   */
   webServer: process.env.E2E_BASE_URL
     ? undefined
     : {

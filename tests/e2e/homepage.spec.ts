@@ -99,16 +99,20 @@ test.describe('homepage', () => {
     // Activated by keyboard: it proves the control is genuinely operable
     // without a mouse, and the sticky header cannot intercept a key press.
     const readMore = page.getByRole('button', { name: /read full testimony/i }).first()
-    await expect(readMore).toHaveAttribute('aria-expanded', 'false')
     await readMore.scrollIntoViewIfNeeded()
     await readMore.focus()
     await page.keyboard.press('Enter')
 
-    // The label flips to "Show less", so assert on the expanded control rather
-    // than re-resolving the original (now-renamed) locator.
-    const expanded = page.getByRole('button', { name: /show less/i }).first()
-    await expect(expanded).toBeVisible()
-    await expect(expanded).toHaveAttribute('aria-expanded', 'true')
+    // The full text opens in a dialog rather than expanding in place, so the
+    // grid below does not reflow under the reader.
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText(/personal account submitted by a worshipper/i)
+
+    // Escape closes it and focus returns to the trigger.
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+    await expect(readMore).toBeFocused()
   })
 
   test('never shows a negative or invented countdown', async ({ page }) => {
@@ -129,16 +133,27 @@ test.describe('homepage', () => {
     expect(digits).not.toContain('-')
   })
 
-  test('opens all thirteen FAQs without JavaScript-dependent controls', async ({ page }) => {
+  test('opens all thirteen FAQs from the keyboard', async ({ page }) => {
     await page.goto('/')
+    await page.waitForLoadState('networkidle')
 
-    const faqs = page.locator('details')
-    await expect(faqs).toHaveCount(13)
+    // Every question is present, and every answer is in the HTML for crawlers
+    // even while its panel is collapsed.
+    const questions = page.getByRole('button', { name: /\?$/ })
+    await expect(questions).toHaveCount(13)
 
-    const first = faqs.first()
-    await expect(first).not.toHaveAttribute('open', '')
-    await first.locator('summary').click()
-    await expect(first).toHaveAttribute('open', '')
+    const first = questions.first()
+    await expect(first).toHaveAttribute('aria-expanded', 'false')
+    await first.focus()
+    await page.keyboard.press('Enter')
+    await expect(first).toHaveAttribute('aria-expanded', 'true')
+
+    // Opening one must not close another — they are independent.
+    const second = questions.nth(1)
+    await second.focus()
+    await page.keyboard.press('Enter')
+    await expect(first).toHaveAttribute('aria-expanded', 'true')
+    await expect(second).toHaveAttribute('aria-expanded', 'true')
   })
 
   test('mobile menu traps focus, closes on Escape and restores focus', async ({ page }) => {
@@ -151,13 +166,14 @@ test.describe('homepage', () => {
     const dialog = page.getByRole('dialog', { name: /site menu/i })
     await expect(dialog).toBeVisible()
 
-    // Background scroll is locked while the panel is open.
-    expect(await page.evaluate(() => document.body.style.overflow)).toBe('hidden')
+    // Background scroll is locked while the panel is open. Radix sets this on
+    // <body>, so read the computed style rather than the inline one.
+    expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).toBe('hidden')
 
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
     await expect(trigger).toBeFocused()
-    expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
+    expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).not.toBe('hidden')
   })
 
   test('validates the testimony form and requires consent', async ({ page }) => {
@@ -209,6 +225,27 @@ test.describe('homepage', () => {
       .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'])
       .analyze()
     expect(results.violations, JSON.stringify(results.violations, null, 2)).toEqual([])
+  })
+
+  test('overlays the hero at the top and turns solid on scroll', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    const header = page.locator('header')
+    await expect(header).toHaveAttribute('data-transparent', 'true')
+
+    // The hero must start at exactly the header's top edge. Any gap is a strip
+    // of white page background showing above the photograph, and the white nav
+    // text sitting on it becomes invisible.
+    const gap = await page.evaluate(() => {
+      const h = document.querySelector('header')!.getBoundingClientRect()
+      const hero = document.querySelector('main section')!.getBoundingClientRect()
+      return Math.round(hero.top - h.top)
+    })
+    expect(gap).toBe(0)
+
+    await page.evaluate(() => window.scrollTo(0, 600))
+    await expect(header).not.toHaveAttribute('data-transparent', 'true')
   })
 
   test('has no horizontal overflow at any supported width', async ({ page }) => {

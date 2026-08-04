@@ -29,6 +29,7 @@ import {
 import { validateAnswers, type AnswerMap } from '@/lib/questions/engine'
 import {
   getOrCreateDraft,
+  getOrCreateParticipation,
   loadWizardState,
   nextRegistrationId,
   persistAnswers,
@@ -249,22 +250,18 @@ export async function saveDepartmentAction(values: unknown, answers: AnswerMap):
 
   const department = await db.department.findFirst({
     where: { id: parsed.data.departmentId, isActive: true },
-    select: { id: true, name: true, capacity: true },
+    select: { id: true, name: true },
   })
   if (!department) return fail('Select a valid department', { departmentId: 'Select a valid department' })
 
-  // Capacity is enforced here as well as displayed, so a stale page cannot
-  // push a department past its limit.
-  if (department.capacity) {
-    const taken = await db.volunteerApplication.count({
-      where: { departmentId: department.id, status: { not: 'DRAFT' }, id: { not: application.id } },
-    })
-    if (taken >= department.capacity) {
-      return fail(`${department.name} is now full`, {
-        departmentId: `${department.name} has reached its volunteer capacity. Please choose another department.`,
-      })
-    }
-  }
+  /*
+   * No capacity check.
+   *
+   * There is no fixed limit on the number of volunteers a department needs, so
+   * nothing here may refuse an application because a count has been reached.
+   * This used to turn people away with "{Department} has reached its volunteer
+   * capacity" — a rule the organisation does not have.
+   */
 
   const questions = await getDepartmentQuestions(department.id)
   const answerErrors = validateAnswers(questions, answers)
@@ -274,11 +271,14 @@ export async function saveDepartmentAction(values: unknown, answers: AnswerMap):
     return fail('Please answer the department questions', fieldErrors)
   }
 
-  await db.volunteerApplication.update({
-    where: { id: application.id },
+  // The department is a choice for *this* edition; a volunteer may serve
+  // somewhere else next time without disturbing what they did before.
+  const participation = await getOrCreateParticipation(application.id)
+  await db.editionParticipation.update({
+    where: { id: participation.id },
     data: { departmentId: department.id },
   })
-  await persistAnswers(application.id, questions, answers)
+  await persistAnswers(participation.id, questions, answers)
   await advance(application.id, 5)
   return ok()
 }
@@ -296,12 +296,14 @@ export async function saveAvailabilityAction(values: unknown): Promise<ActionRes
     return fail('Select at least one valid date', { availableDates: 'Select at least one date you can serve' })
   }
 
+  const participation = await getOrCreateParticipation(application.id)
+
   await db.$transaction(async (tx) => {
-    await tx.volunteerAvailability.deleteMany({ where: { applicationId: application.id } })
+    await tx.volunteerAvailability.deleteMany({ where: { participationId: participation.id } })
     for (const date of dates) {
       for (const period of data.preferredPeriods) {
         await tx.volunteerAvailability.create({
-          data: { applicationId: application.id, date: new Date(`${date}T00:00:00.000Z`), period },
+          data: { participationId: participation.id, date: new Date(`${date}T00:00:00.000Z`), period },
         })
       }
     }
@@ -334,8 +336,8 @@ export async function saveAvailabilityAction(values: unknown): Promise<ActionRes
       },
     })
 
-    await tx.volunteerApplication.update({
-      where: { id: application.id },
+    await tx.editionParticipation.update({
+      where: { id: participation.id },
       data: { availableOvernight: data.availableOvernight },
     })
   })
@@ -440,7 +442,7 @@ export async function submitApplicationAction(values: unknown): Promise<ActionRe
   if (!settings.registration_open) return fail(settings.registration_closed_message, undefined, 'registration_closed')
 
   const state = await loadWizardState(user.id)
-  const { application, profile } = state
+  const { application, participation, profile } = state
 
   if (application.status !== 'DRAFT') {
     return fail('This application has already been submitted', undefined, 'already_submitted')
@@ -455,7 +457,7 @@ export async function submitApplicationAction(values: unknown): Promise<ActionRe
   if (!profile?.countryId || !profile.city) problems.push('location')
   if (!profile?.occupation || !profile.education) problems.push('professional')
   if (!profile?.denomination) problems.push('church')
-  if (!application.departmentId) problems.push('department')
+  if (!participation.departmentId) problems.push('department')
   if (!state.emergency || state.availability.length === 0) problems.push('availability')
   if (!application.whyVolunteer || !application.discoverySource) problems.push('motivation')
 
@@ -467,7 +469,7 @@ export async function submitApplicationAction(values: unknown): Promise<ActionRe
     )
   }
 
-  const questions = await getDepartmentQuestions(application.departmentId!)
+  const questions = await getDepartmentQuestions(participation.departmentId!)
   const answerErrors = validateAnswers(questions, state.answers)
   if (Object.keys(answerErrors).length > 0) {
     return fail('Some department questions still need answers', undefined, 'incomplete_answers')
@@ -482,15 +484,29 @@ export async function submitApplicationAction(values: unknown): Promise<ActionRe
       registrationId,
       status: 'SUBMITTED',
       submittedAt: new Date(),
+      submissionIp: clientIp(headerList),
+      submissionUserAgent: headerList.get('user-agent')?.slice(0, 500) ?? null,
+      draftData: undefined,
+      currentStep: 8,
+    },
+  })
+
+  /*
+   * Consents belong to the edition and are re-taken each one.
+   *
+   * Recording them on the application would mean a volunteer who agreed to the
+   * 2027 terms was treated as having agreed to whatever the 2029 terms turn out
+   * to be — which is not consent.
+   */
+  const confirmed = await db.editionParticipation.update({
+    where: { id: participation.id },
+    data: {
       consentAccurate: true,
       consentTerms: true,
       consentDataProcessing: true,
       consentCommunication: true,
       consentedAt: new Date(),
-      submissionIp: clientIp(headerList),
-      submissionUserAgent: headerList.get('user-agent')?.slice(0, 500) ?? null,
-      draftData: undefined,
-      currentStep: 8,
+      confirmedAt: new Date(),
     },
     include: { department: { select: { name: true } } },
   })
@@ -504,14 +520,14 @@ export async function submitApplicationAction(values: unknown): Promise<ActionRe
     entityType: 'VolunteerApplication',
     entityId: application.id,
     actorId: user.id,
-    metadata: { registrationId, departmentId: application.departmentId },
+    metadata: { registrationId, departmentId: participation.departmentId, edition: participation.edition },
   })
 
   // Confirmation email — deliberately excludes health and emergency details.
   const message = submissionEmail({
     name: `${profile!.firstName} ${profile!.lastName}`,
     registrationId,
-    department: submitted.department?.name ?? 'Unassigned',
+    department: confirmed.department?.name ?? 'Unassigned',
     submittedAt: formatDate(submitted.submittedAt, false),
     loginUrl: `${env.APP_URL}/dashboard`,
   })

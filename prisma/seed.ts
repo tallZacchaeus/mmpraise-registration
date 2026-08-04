@@ -13,7 +13,8 @@ import { PrismaClient } from '../src/generated/prisma/client'
 import type { LookupCategory, QuestionType } from '../src/generated/prisma/enums'
 import { hashPassword } from '../src/lib/auth/password'
 import { COUNTRIES, PRIORITY_COUNTRIES, STATES } from './seed-data/geography'
-import { CONTINENTS, REGIONS, SAMPLE_PARISHES } from './seed-data/church'
+import { CONTINENTS, REGIONS } from './seed-data/church'
+import { churchDirectory } from './seed-data/church-directory'
 import { DEPARTMENTS } from './seed-data/departments'
 import { DISCOVERY_SOURCES, EDUCATION_LEVELS, OCCUPATIONS } from './seed-data/lookups'
 
@@ -69,36 +70,92 @@ async function seedChurchHierarchy() {
     })
   }
 
+  const africa = await db.churchContinent.findUnique({ where: { name: 'Africa' } })
+
+  /*
+   * The Nigerian hierarchy comes from the organisation's own directory
+   * (DIRECTORIES.xlsx → seed-data/church-directory.ts): 66 regions, 469
+   * provinces. Everything is upserted by name rather than recreated, because
+   * volunteer profiles hold foreign keys to these rows and deleting one would
+   * orphan somebody's application.
+   */
+  const seenRegionIds = new Set<string>()
+  const seenProvinceIds = new Set<string>()
   let provinceCount = 0
-  let parishCount = 0
-  for (const [index, region] of REGIONS.entries()) {
-    const continent = await db.churchContinent.findUnique({ where: { name: region.continent } })
+
+  for (const [index, region] of churchDirectory.entries()) {
     const saved = await db.churchRegion.upsert({
       where: { name: region.name },
-      update: { continentId: continent?.id, sortOrder: index },
-      create: { name: region.name, continentId: continent?.id, sortOrder: index },
+      update: { continentId: africa?.id, sortOrder: index, isActive: true },
+      create: { name: region.name, continentId: africa?.id, sortOrder: index },
     })
+    seenRegionIds.add(saved.id)
 
     for (const [pIndex, provinceName] of region.provinces.entries()) {
       const province = await db.churchProvince.upsert({
         where: { regionId_name: { regionId: saved.id, name: provinceName } },
+        update: { sortOrder: pIndex, isActive: true },
+        create: { regionId: saved.id, name: provinceName, sortOrder: pIndex },
+      })
+      seenProvinceIds.add(province.id)
+      provinceCount++
+    }
+  }
+
+  /*
+   * Anything African that is no longer in the directory is retired, not
+   * removed. Deactivating takes it out of every dropdown while leaving the row
+   * — and therefore every profile pointing at it — intact. Deleting would
+   * either fail on the foreign key or silently blank a volunteer's church
+   * details, and neither is acceptable for data somebody entered themselves.
+   */
+  const retiredProvinces = await db.churchProvince.updateMany({
+    where: {
+      isActive: true,
+      id: { notIn: [...seenProvinceIds] },
+      region: { continentId: africa?.id },
+    },
+    data: { isActive: false },
+  })
+  const retiredRegions = await db.churchRegion.updateMany({
+    where: { isActive: true, continentId: africa?.id, id: { notIn: [...seenRegionIds] } },
+    data: { isActive: false },
+  })
+
+  /*
+   * International regions keep their own seed data — the directory covers
+   * Nigeria only, and deactivating them would strip diaspora volunteers of any
+   * way to say where they worship.
+   */
+  let internationalProvinces = 0
+  for (const [index, region] of REGIONS.entries()) {
+    if (region.continent === 'Africa') continue
+    const continent = await db.churchContinent.findUnique({ where: { name: region.continent } })
+    const saved = await db.churchRegion.upsert({
+      where: { name: region.name },
+      update: { continentId: continent?.id, sortOrder: 1000 + index },
+      create: { name: region.name, continentId: continent?.id, sortOrder: 1000 + index },
+    })
+
+    for (const [pIndex, provinceName] of region.provinces.entries()) {
+      await db.churchProvince.upsert({
+        where: { regionId_name: { regionId: saved.id, name: provinceName } },
         update: { sortOrder: pIndex },
         create: { regionId: saved.id, name: provinceName, sortOrder: pIndex },
       })
-      provinceCount++
-
-      for (const parishName of SAMPLE_PARISHES[provinceName] ?? []) {
-        const existing = await db.parish.findFirst({
-          where: { provinceId: province.id, name: parishName },
-        })
-        if (!existing) {
-          await db.parish.create({ data: { provinceId: province.id, name: parishName } })
-          parishCount++
-        }
-      }
+      internationalProvinces++
     }
   }
-  console.log(`  church regions: ${REGIONS.length}, provinces: ${provinceCount}, parishes: ${parishCount}`)
+
+  console.log(
+    `  church regions: ${churchDirectory.length} Nigerian + international, ` +
+      `provinces: ${provinceCount} + ${internationalProvinces}`,
+  )
+  if (retiredRegions.count || retiredProvinces.count) {
+    console.log(
+      `  retired (hidden, not deleted): ${retiredRegions.count} regions, ${retiredProvinces.count} provinces`,
+    )
+  }
 }
 
 async function seedLookups() {
@@ -220,9 +277,10 @@ async function seedSettings() {
   const defaults: Record<string, unknown> = {
     registration_open: true,
     registration_closed_message:
-      'Volunteer registration for MMPraise 2026 is currently closed. Please check back soon.',
-    event_name: "84 Hours Marathon Messiah's Praise 2026",
-    event_dates: ['2026-12-24', '2026-12-25', '2026-12-26', '2026-12-27'],
+      'Volunteer registration for MMPraise 2027 is currently closed. Please check back soon.',
+    // Confirmed: 85 hours from 02:00 WAT on Monday 1 March 2027.
+    event_name: "85 Hours Marathon Messiah's Praise 2027",
+    event_dates: ['2027-03-01', '2027-03-02', '2027-03-03', '2027-03-04'],
     support_email: process.env.SUPPORT_EMAIL ?? 'volunteers@mmpraise.org',
     minor_age_ranges: ['AGE_00_15'],
   }

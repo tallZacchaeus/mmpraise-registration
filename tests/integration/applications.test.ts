@@ -6,6 +6,7 @@ import {
   resetVolunteerData,
   testDb,
 } from '../helpers/db'
+import { sessionUser } from '../helpers/session'
 import { hashPassword, verifyPassword } from '@/lib/auth/password'
 import type { AnswerMap, QuestionDef } from '@/lib/questions/engine'
 import { pruneHiddenAnswers } from '@/lib/questions/engine'
@@ -43,16 +44,28 @@ describeDb('application persistence', () => {
     })
   }
 
+  /**
+   * The application plus its current-edition participation, mirroring the
+   * wizard: the person applies once; the department belongs to the edition.
+   */
   async function createApplication(userId: string, departmentSlug = 'praise-team') {
     const department = await db.department.findUnique({ where: { slug: departmentSlug } })
-    return db.volunteerApplication.create({
+    const application = await db.volunteerApplication.create({
       data: {
         userId,
-        departmentId: department!.id,
         registrationId: `DRAFT-${userId.slice(-8)}`,
         status: 'DRAFT',
       },
     })
+    const participation = await db.editionParticipation.create({
+      data: {
+        applicationId: application.id,
+        edition: '2027',
+        year: 2027,
+        departmentId: department!.id,
+      },
+    })
+    return { ...application, participationId: participation.id }
   }
 
   async function loadQuestions(slug: string): Promise<QuestionDef[]> {
@@ -108,10 +121,10 @@ describeDb('application persistence', () => {
       instrument: { options: [{ value: 'other', otherText: 'Cello' }] },
     }
 
-    await persistAnswers(application.id, questions, answers)
+    await persistAnswers(application.participationId, questions, answers)
 
     const stored = await db.applicationAnswer.findMany({
-      where: { applicationId: application.id },
+      where: { participationId: application.participationId },
       include: { question: true, options: { include: { option: true } } },
     })
 
@@ -137,11 +150,11 @@ describeDb('application persistence', () => {
 
     expect(Object.keys(pruneHiddenAnswers(questions, answers))).not.toContain('instrument')
 
-    await persistAnswers(application.id, questions, answers)
+    await persistAnswers(application.participationId, questions, answers)
 
     const keys = (
       await db.applicationAnswer.findMany({
-        where: { applicationId: application.id },
+        where: { participationId: application.participationId },
         include: { question: { select: { key: true } } },
       })
     ).map((a) => a.question.key)
@@ -156,19 +169,19 @@ describeDb('application persistence', () => {
     const questions = await loadQuestions('praise-team')
     const { persistAnswers } = await import('@/lib/applications/service')
 
-    await persistAnswers(application.id, questions, {
+    await persistAnswers(application.participationId, questions, {
       first_time: { options: [{ value: 'yes' }] },
       music_option: { options: [{ value: 'singer' }] },
       voice_role: { options: [{ value: 'alto' }] },
     })
-    await persistAnswers(application.id, questions, {
+    await persistAnswers(application.participationId, questions, {
       first_time: { options: [{ value: 'yes' }] },
       music_option: { options: [{ value: 'singer' }] },
       voice_role: { options: [{ value: 'tenor' }] },
     })
 
     const answers = await db.applicationAnswer.findMany({
-      where: { applicationId: application.id },
+      where: { participationId: application.participationId },
       include: { question: { select: { key: true } }, options: { include: { option: true } } },
     })
     expect(answers).toHaveLength(3)
@@ -253,10 +266,12 @@ describeDb('health information isolation', () => {
     const application = await db.volunteerApplication.create({
       data: {
         userId: user.id,
-        departmentId: department!.id,
         registrationId: 'MMP-TEST-HEALTH',
         status: 'SUBMITTED',
         submittedAt: new Date(),
+        participations: {
+          create: { edition: '2027', year: 2027, departmentId: department!.id },
+        },
       },
     })
     await db.applicationHealthInfo.create({
@@ -265,17 +280,7 @@ describeDb('health information isolation', () => {
 
     const { listApplications } = await import('@/lib/admin/queries')
     const result = await listApplications(
-      {
-        id: 'admin',
-        email: 'admin@example.com',
-        username: 'admin',
-        roles: ['REGISTRATION_ADMIN'],
-        emailVerified: true,
-        departmentScopes: [],
-        firstName: null,
-        lastName: null,
-        photoDocumentId: null,
-      },
+      sessionUser({ id: 'admin', email: 'admin@example.com', username: 'admin', roles: ['REGISTRATION_ADMIN'] }),
       {},
     )
 
@@ -305,33 +310,32 @@ describeDb('health information isolation', () => {
       await db.volunteerApplication.create({
         data: {
           userId: user.id,
-          departmentId: department!.id,
           registrationId: `MMP-TEST-SCOPE-${index}`,
           status: 'SUBMITTED',
           submittedAt: new Date(),
+          // Scoping now reads the current edition's participation.
+          participations: {
+            create: { edition: '2027', year: 2027, departmentId: department!.id },
+          },
         },
       })
     }
 
     const { listApplications } = await import('@/lib/admin/queries')
-    const head = {
+    const head = sessionUser({
       id: 'head',
       email: 'head@example.com',
       username: 'head',
-      roles: ['DEPARTMENT_HEAD'] as const,
-      emailVerified: true,
+      roles: ['DEPARTMENT_HEAD'],
       departmentScopes: [media!.id],
-      firstName: null,
-      lastName: null,
-      photoDocumentId: null,
-    }
+    })
 
-    const scoped = await listApplications({ ...head, roles: [...head.roles] }, {})
+    const scoped = await listApplications(head, {})
     expect(scoped.total).toBe(1)
-    expect(scoped.items[0]?.department?.id).toBe(media!.id)
+    expect(scoped.items[0]?.participations[0]?.department?.id).toBe(media!.id)
 
     // Asking for another department must not widen the scope.
-    const attempted = await listApplications({ ...head, roles: [...head.roles] }, { departmentId: welfare!.id })
+    const attempted = await listApplications(head, { departmentId: welfare!.id })
     expect(attempted.total).toBe(0)
   })
 })

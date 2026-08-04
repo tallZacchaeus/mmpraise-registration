@@ -1,4 +1,5 @@
 import 'server-only'
+import { eventConfig } from '@/config/site'
 import { db } from '@/lib/db'
 import type { ApplicationStatus, Prisma } from '@/generated/prisma/client'
 import { departmentScope } from '@/lib/auth/rbac'
@@ -38,9 +39,21 @@ export function buildWhere(user: SessionUser, filters: ApplicationFilters): Pris
     status: { not: 'DRAFT' },
   }
 
+  /*
+   * Department now belongs to an edition, not to the application.
+   *
+   * A volunteer may serve in Media one edition and Medical the next, so
+   * "applications in the Media department" is only meaningful once you say
+   * *when*. Every department condition below therefore reaches through the
+   * current edition's participation.
+   */
+  const participation: Prisma.EditionParticipationWhereInput = { edition: eventConfig.edition }
+  let scopedByDepartment = false
+
   if (scope !== null) {
     // An empty scope must match nothing, not everything.
-    where.departmentId = scope.length > 0 ? { in: scope } : '__none__'
+    participation.departmentId = scope.length > 0 ? { in: scope } : '__none__'
+    scopedByDepartment = true
   }
 
   if (filters.status && filters.status !== 'all') {
@@ -49,11 +62,13 @@ export function buildWhere(user: SessionUser, filters: ApplicationFilters): Pris
 
   if (filters.departmentId && filters.departmentId !== 'all') {
     // Intersect with the scope rather than replacing it.
-    if (scope === null || scope.includes(filters.departmentId)) {
-      where.departmentId = filters.departmentId
-    } else {
-      where.departmentId = '__none__'
-    }
+    participation.departmentId =
+      scope === null || scope.includes(filters.departmentId) ? filters.departmentId : '__none__'
+    scopedByDepartment = true
+  }
+
+  if (scopedByDepartment) {
+    where.participations = { some: participation }
   }
 
   const profileFilter: Prisma.VolunteerProfileWhereInput = {}
@@ -76,6 +91,8 @@ export function buildWhere(user: SessionUser, filters: ApplicationFilters): Pris
     const contains = { contains: q, mode: 'insensitive' as const }
     where.OR = [
       { registrationId: contains },
+      // The number a volunteer actually quotes at a desk or down a phone.
+      { user: { mmpCode: contains } },
       { user: { email: contains } },
       { user: { phone: contains } },
       { user: { username: contains } },
@@ -111,11 +128,18 @@ export async function listApplications(user: SessionUser, filters: ApplicationFi
         registrationId: true,
         status: true,
         submittedAt: true,
-        department: { select: { id: true, name: true } },
+        // Exactly one row, because `(applicationId, edition)` is unique.
+        participations: {
+          where: { edition: eventConfig.edition },
+          select: { id: true, status: true, department: { select: { id: true, name: true } } },
+        },
+        // How much discussion a record has attracted — a review signal.
+        _count: { select: { notes: true } },
         user: {
           select: {
             email: true,
             phone: true,
+            mmpCode: true,
             profile: {
               select: {
                 firstName: true,
@@ -137,6 +161,21 @@ export async function listApplications(user: SessionUser, filters: ApplicationFi
   return { items, total, page, perPage, pages: Math.max(1, Math.ceil(total / perPage)) }
 }
 
+/**
+ * How many applications in this view are still reviewable.
+ *
+ * Drives the bulk-approve button: the number it shows is the number the action
+ * will re-verify before touching anything, so the two must come from the same
+ * `buildWhere` or the contract between them is fiction.
+ */
+export async function countReviewable(user: SessionUser, filters: ApplicationFilters) {
+  return db.volunteerApplication.count({
+    where: {
+      AND: [buildWhere(user, filters), { status: { in: ['SUBMITTED', 'UNDER_REVIEW'] } }],
+    },
+  })
+}
+
 /** Full application for the review screen. Excludes health information. */
 export async function getApplicationForReview(user: SessionUser, id: string) {
   const scope = departmentScope(user)
@@ -144,13 +183,28 @@ export async function getApplicationForReview(user: SessionUser, id: string) {
   const application = await db.volunteerApplication.findUnique({
     where: { id },
     include: {
-      department: true,
+      participations: {
+        orderBy: { edition: 'desc' },
+        include: {
+          department: true,
+          availability: { orderBy: { date: 'asc' } },
+          assignments: { include: { shift: true } },
+          answers: {
+            include: {
+              question: { select: { id: true, key: true, label: true, type: true, sortOrder: true } },
+              options: { include: { option: { select: { value: true, label: true } } } },
+              document: { select: { id: true, originalName: true, mimeType: true, sizeBytes: true } },
+            },
+          },
+        },
+      },
       user: {
         select: {
           id: true,
           email: true,
           phone: true,
           username: true,
+          mmpCode: true,
           emailVerifiedAt: true,
           profile: {
             include: {
@@ -163,14 +217,6 @@ export async function getApplicationForReview(user: SessionUser, id: string) {
           },
         },
       },
-      answers: {
-        include: {
-          question: { select: { id: true, key: true, label: true, type: true, sortOrder: true } },
-          options: { include: { option: { select: { value: true, label: true } } } },
-          document: { select: { id: true, originalName: true, mimeType: true, sizeBytes: true } },
-        },
-      },
-      availability: { orderBy: { date: 'asc' } },
       emergency: true,
       documents: { select: { id: true, kind: true, originalName: true, mimeType: true, sizeBytes: true } },
       statusHistory: {
@@ -181,13 +227,28 @@ export async function getApplicationForReview(user: SessionUser, id: string) {
         orderBy: { createdAt: 'desc' },
         include: { author: { select: { username: true } } },
       },
-      assignments: { include: { shift: true } },
     },
   })
 
   if (!application) return null
   if (application.status === 'DRAFT') return null
-  if (scope !== null && (!application.departmentId || !scope.includes(application.departmentId))) return null
+
+  /*
+   * Department scoping now asks "has this volunteer ever served in one of my
+   * departments?" rather than reading a single column.
+   *
+   * Deliberately *any* edition, not just the current one: a department head
+   * reviewing somebody who served with them in 2026 and has not yet chosen a
+   * department for 2027 must still be able to open the record they already
+   * hold history for.
+   */
+  if (scope !== null) {
+    const visible = application.participations.some(
+      (participation) =>
+        participation.departmentId !== null && scope.includes(participation.departmentId),
+    )
+    if (!visible) return null
+  }
 
   return application
 }
@@ -198,7 +259,16 @@ export async function getAnalytics(user: SessionUser) {
 
   const [byStatus, byDepartment, byCountry, byAgeRange, total, recent] = await Promise.all([
     db.volunteerApplication.groupBy({ by: ['status'], where, _count: { _all: true } }),
-    db.volunteerApplication.groupBy({ by: ['departmentId'], where, _count: { _all: true } }),
+    /*
+     * Department distribution comes from participations in the current edition.
+     * Grouping applications by department is no longer possible — and no longer
+     * meaningful, since a volunteer's department is a per-edition choice.
+     */
+    db.editionParticipation.groupBy({
+      by: ['departmentId'],
+      where: { edition: eventConfig.edition, application: where },
+      _count: { _all: true },
+    }),
     db.volunteerProfile.groupBy({
       by: ['countryId'],
       where: { user: { applications: { some: where } } },

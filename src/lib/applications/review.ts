@@ -13,7 +13,7 @@ import type { WizardState } from './service'
  * three can never drift apart.
  */
 export async function buildReviewSections(state: WizardState): Promise<ReviewSection[]> {
-  const { application, profile, answers, availability, emergency, health, user } = state
+  const { application, participation, profile, answers, availability, emergency, health, user } = state
 
   const [occupations, educations, discoveries] = await Promise.all([
     getLookupOptions('OCCUPATION'),
@@ -31,8 +31,9 @@ export async function buildReviewSections(state: WizardState): Promise<ReviewSec
       ? db.churchProvince.findUnique({ where: { id: profile.churchProvinceId }, select: { name: true } })
       : null,
     profile?.parishId ? db.parish.findUnique({ where: { id: profile.parishId }, select: { name: true } }) : null,
-    application.departmentId
-      ? db.department.findUnique({ where: { id: application.departmentId }, select: { id: true, name: true } })
+    // Department belongs to the edition, not to the application.
+    participation.departmentId
+      ? db.department.findUnique({ where: { id: participation.departmentId }, select: { id: true, name: true } })
       : null,
   ])
 
@@ -135,7 +136,12 @@ export async function buildReviewSections(state: WizardState): Promise<ReviewSec
       },
       {
         label: 'Available overnight',
-        value: application.availableOvernight === null ? '—' : application.availableOvernight ? 'Yes' : 'No',
+        value:
+          participation.availableOvernight === null
+            ? '—'
+            : participation.availableOvernight
+              ? 'Yes'
+              : 'No',
       },
       { label: 'Emergency contact', value: emergency ? `${emergency.name} (${emergency.relationship})` : '—' },
       { label: 'Emergency phone', value: emergency?.phone ?? '—' },

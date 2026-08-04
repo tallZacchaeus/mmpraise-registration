@@ -164,3 +164,58 @@ export function announcementEmail(params: { name: string; title: string; body: s
     text: `Hello ${params.name},\n\n${params.body}\n\nOpen your dashboard: ${params.loginUrl}`,
   }
 }
+
+/**
+ * Invitation to someone whose details were migrated from a previous edition.
+ *
+ * Contains no password, no reset token and no profile data beyond the person's
+ * first name. It deliberately routes them through "Forgot your password?"
+ * rather than embedding a link that would grant access: a bulk mail-out of
+ * live credentials is a breach waiting for one forwarded message, and the
+ * ordinary reset flow already proves control of the mailbox.
+ */
+export function migrationInvitationEmail(params: {
+  name: string
+  edition: string
+  loginUrl: string
+  resetUrl: string
+  supportEmail: string
+}): MailMessage {
+  const html = layout(
+    'Your MMPraise account is ready',
+    `<p>Hello ${escapeHtml(params.name)},</p>
+     <p>You are receiving this because you took part in Marathon Messiah’s Praise ${escapeHtml(params.edition)}. We have moved your record onto our new volunteer platform, so <strong>you do not need to create another account</strong>.</p>
+     <p>To get in, set a password on the account you already have:</p>
+     <ol style="padding-left:18px;color:#353535;">
+       <li>Go to the sign-in page.</li>
+       <li>Choose <strong>“Forgot your password?”</strong></li>
+       <li>Enter this same email address.</li>
+       <li>Follow the secure link we send you and choose a password.</li>
+     </ol>
+     ${button(params.resetUrl, 'Set your password')}
+     <p style="font-size:13px;color:#5a5a5a;">Or sign in here once you have: ${escapeHtml(params.loginUrl)}</p>
+     <p>After signing in you will be asked to check your details are still correct, and to complete anything we now need for the current edition.</p>
+     <p style="font-size:13px;color:#5a5a5a;">Please do not forward the password link we send you — it gives access to your account. If you did not expect this email, you can ignore it; nothing changes until you set a password. Questions? Write to ${escapeHtml(params.supportEmail)}.</p>`,
+  )
+
+  const text = `Hello ${params.name},
+
+You are receiving this because you took part in Marathon Messiah's Praise ${params.edition}. We have moved your record onto our new volunteer platform, so you do not need to create another account.
+
+To get in, set a password on the account you already have:
+  1. Go to ${params.loginUrl}
+  2. Choose "Forgot your password?"
+  3. Enter this same email address.
+  4. Follow the secure link we send you and choose a password.
+
+Set your password: ${params.resetUrl}
+
+After signing in you will be asked to check your details are still correct, and to complete anything we now need for the current edition.
+
+Please do not forward the password link we send you - it gives access to your account. If you did not expect this email, you can ignore it; nothing changes until you set a password.
+
+Questions? Write to ${params.supportEmail}.`
+
+  // `to` is filled in by the caller, matching the other templates here.
+  return { to: '', subject: 'Your MMPraise volunteer account is ready', html, text }
+}

@@ -105,7 +105,75 @@ test.describe('volunteer registration', () => {
 
     await expect(page).toHaveURL(/\/apply\/submitted/, { timeout: 30_000 })
     await expect(page.getByRole('heading', { name: /registration submitted/i })).toBeVisible()
-    await expect(page.getByText(/MMP-\d{4}-\d{6}/)).toBeVisible()
+
+    /*
+     * The confirmation shows the volunteer's permanent MMP number, not the
+     * per-edition `MMP-2027-000123` reference it used to show.
+     *
+     * A volunteer registers once and returns each edition to mark availability,
+     * so the number that identifies them never changes — and it is the only one
+     * they should ever be asked to quote. Showing two identifiers that both
+     * begin "MMP" is how a check-in desk looks up the wrong one.
+     */
+    await expect(page.getByText(/MMP\d{7}/)).toBeVisible()
+    await expect(page.locator('main')).not.toContainText(/MMP-\d{4}-\d{6}/)
+  })
+
+  test('shows the two-step journey rather than a bare step count', async ({ page }) => {
+    await page.goto('/register')
+
+    const stepper = page.getByRole('navigation', { name: /registration progress/i })
+    await expect(stepper).toBeVisible()
+    await expect(stepper.getByText('Account')).toBeVisible()
+    await expect(stepper.getByText('Registration')).toBeVisible()
+    // The current step is announced, not only coloured.
+    await expect(stepper.locator('[aria-current="step"]')).toContainText('Account')
+  })
+
+  test('reports username availability live and offers alternatives', async ({ page }) => {
+    const taken = newVolunteer('dupe')
+    await signUp(page, taken)
+    await signOut(page)
+
+    await page.goto('/register')
+    await page.locator('#signup-username').fill(taken.username)
+
+    // Debounced, so allow for the wait before the verdict lands.
+    await expect(page.getByText(/already taken/i)).toBeVisible({ timeout: 15_000 })
+
+    // A rejection must come with a way forward, not just a refusal.
+    const suggestion = page.getByRole('button', { name: new RegExp(`^${taken.username}\\d$`) }).first()
+    await expect(suggestion).toBeVisible()
+    const chosen = await suggestion.innerText()
+    await suggestion.click()
+    await expect(page.locator('#signup-username')).toHaveValue(chosen)
+    await expect(page.getByText(/that username is available/i)).toBeVisible({ timeout: 15_000 })
+  })
+
+  test('generates a password that satisfies every rule', async ({ page }) => {
+    await page.goto('/register')
+
+    await page.getByRole('button', { name: /generate a secure password/i }).click()
+
+    const value = await page.locator('#signup-password').inputValue()
+    expect(value.length).toBeGreaterThanOrEqual(12)
+    // Revealed on generation — nobody can save a password they never saw.
+    await expect(page.locator('#signup-password')).toHaveAttribute('type', 'text')
+
+    const meter = page.getByRole('progressbar', { name: /password strength/i })
+    await expect(meter).toBeVisible()
+    expect(Number(await meter.getAttribute('aria-valuenow'))).toBeGreaterThanOrEqual(3)
+  })
+
+  test('confirms the two passwords match as you type', async ({ page }) => {
+    await page.goto('/register')
+
+    await page.locator('#signup-password').fill('Praise2027!Strong')
+    await page.locator('#signup-confirmPassword').fill('Praise2027!Wrong')
+    await expect(page.getByText(/both passwords must match/i)).toBeVisible()
+
+    await page.locator('#signup-confirmPassword').fill('Praise2027!Strong')
+    await expect(page.getByText(/both passwords match/i)).toBeVisible()
   })
 
   test('keeps a draft after a page reload', async ({ page }) => {
@@ -172,7 +240,7 @@ test.describe('volunteer registration', () => {
     await page.locator('#signup-password').fill(volunteer.password)
     await page.locator('#signup-confirmPassword').fill(volunteer.password)
     await page.locator('form input[type="checkbox"]').first().check()
-    await page.getByRole('button', { name: /create account/i }).click()
+    await page.getByRole('button', { name: /continue to volunteer registration/i }).click()
 
     await expect(page.getByRole('alert').first()).toContainText(/already registered/i)
   })

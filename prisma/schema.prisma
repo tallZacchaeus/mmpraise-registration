@@ -112,6 +112,88 @@ enum SubmissionStatus {
   REJECTED
 }
 
+/**
+ * Where a contact message has got to. Deliberately not SubmissionStatus:
+ * a message is triaged and answered, not approved or rejected for publication.
+ */
+/** Lifecycle of a whole CSV import. */
+enum MigrationBatchStatus {
+  DRAFT          // uploaded and mapped, not yet validated
+  VALIDATED      // dry run complete, awaiting confirmation
+  QUEUED         // confirmed, waiting for the worker
+  IMPORTING
+  COMPLETED
+  COMPLETED_WITH_WARNINGS
+  FAILED
+  CANCELLED
+}
+
+/** What the importer decided to do with one CSV row. */
+enum MigrationRowAction {
+  CREATE          // no existing account — create a migrated one
+  MATCH_EXISTING  // email already registered — link, never duplicate
+  SKIP_DUPLICATE  // the same email appeared earlier in this file
+  SKIP_INVALID
+}
+
+enum MigrationRowStatus {
+  PENDING
+  VALID
+  WARNING
+  INVALID
+  IMPORTED
+  FAILED
+  SKIPPED
+}
+
+/**
+ * Invitation delivery.
+ *
+ * SENT means the provider accepted the message, which is all SMTP can tell us.
+ * DELIVERED is only ever set from a provider webhook, so the two are never
+ * conflated — claiming delivery we cannot observe would be a lie to the team
+ * chasing non-responders.
+ */
+enum InvitationStatus {
+  NOT_QUEUED
+  QUEUED
+  SENT
+  DELIVERED
+  BOUNCED
+  FAILED
+  SUPPRESSED     // already activated, or excluded by an administrator
+}
+
+/** Work the queue has to do. Processed out of the request cycle. */
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ContactStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+}
+
+/**
+ * Why someone is writing. Kept as an enum rather than free text so the inbox can
+ * be filtered and routed without parsing subject lines.
+ */
+enum ContactCategory {
+  GENERAL
+  EVENT_INFORMATION
+  REGISTRATION_SUPPORT
+  VOLUNTEER
+  MEDIA
+  PARTNERSHIP
+  DONATION
+  OTHER
+}
+
 enum AnnouncementAudience {
   ALL_VOLUNTEERS
   DEPARTMENT
@@ -128,12 +210,55 @@ model User {
   username        String    @unique
   phone           String?   @unique
   passwordHash    String
+
+  /**
+   * The volunteer's permanent MMP number — `MMP2214059`.
+   *
+   * This is *the* registration number. A volunteer registers once and returns
+   * each edition to mark availability, so the number identifies the person and
+   * never changes: the legacy data shows codes issued in 2022 still attached to
+   * people who served in 2026.
+   *
+   * Not to be confused with `VolunteerApplication.registrationId`, which is a
+   * per-edition reference and is not shown to volunteers.
+   *
+   * Nullable only because accounts created before this column existed are
+   * backfilled by migration; every account created since has one.
+   */
+  mmpCode         String?   @unique
   emailVerifiedAt DateTime?
   isActive        Boolean   @default(true)
   lastLoginAt     DateTime?
   failedLogins    Int       @default(0)
   lockedUntil     DateTime?
   deletionRequestedAt DateTime?
+
+  /**
+   * Migration state.
+   *
+   * `mustReviewProfile` gates the dashboard until a migrated person has
+   * confirmed their details for the current edition. `migrationSource` records
+   * which batch created them, so an import can always be traced back.
+   */
+  isPreviousEditionUser Boolean   @default(false)
+  mustReviewProfile     Boolean   @default(false)
+  migrationSource       String?
+  profileReviewedAt     DateTime?
+
+  /**
+   * Administrative access state.
+   *
+   * Separate from `isActive`, which disables the whole account including
+   * volunteering. These suspend only the administrative side: someone can lose
+   * their reviewer access while remaining a volunteer with an application of
+   * their own. `adminSuspendedUntil` expires on its own so temporary cover — a
+   * leave of absence, an investigation — does not depend on anybody remembering
+   * to switch it back on.
+   */
+  adminDisabledAt     DateTime?
+  adminSuspendedUntil DateTime?
+  adminNote           String?
+
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -149,9 +274,89 @@ model User {
   statusChanges    ApplicationStatusHistory[] @relation("StatusChangedBy")
   announcements    Announcement[]
   testimoniesReviewed TestimonySubmission[] @relation("TestimonyReviewer")
+  contactMessagesHandled ContactMessage[]   @relation("ContactHandler")
+  migrationBatches       MigrationBatch[]   @relation("MigrationCreator")
+  migratedRecords        MigratedUserRecord[] @relation("MigratedRecordUser")
+  previousParticipations PreviousEditionParticipation[]
+  permissionGrants       AdminPermissionGrant[] @relation("PermissionSubject")
+  permissionsGranted     AdminPermissionGrant[] @relation("PermissionGrantor")
+  roleHistory            RoleAssignmentHistory[] @relation("RoleSubject")
+  roleChangesMade        RoleAssignmentHistory[] @relation("RoleActor")
 
   @@index([createdAt])
   @@map("users")
+}
+
+/**
+ * A permission granted to, or withheld from, one administrator directly.
+ *
+ * Roles remain the primary grant: they are what an administrator is given, and
+ * the six defaults cover almost every case. This table is the exception
+ * mechanism — one reviewer who also needs to export, one department head who
+ * must not — expressed without inventing a seventh role that exists for a
+ * single person and is then never maintained.
+ *
+ * `granted` can be false, which is what makes it an *override* rather than an
+ * additive list: a revoke beats the role default, so access can be narrowed as
+ * well as widened, and a leaver can be cut off from one capability without
+ * stripping their whole role.
+ */
+model AdminPermissionGrant {
+  id         String  @id @default(cuid())
+  userId     String
+  /** A value from PERMISSIONS in src/lib/auth/rbac.ts. */
+  permission String
+  /** True adds the permission; false removes it even if a role grants it. */
+  granted    Boolean @default(true)
+  reason     String?
+
+  grantedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user      User  @relation("PermissionSubject", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User? @relation("PermissionGrantor", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  // One decision per permission per administrator; changing it updates in place
+  // so the effective policy can never contain two contradictory rows.
+  @@unique([userId, permission])
+  @@index([permission])
+  @@map("admin_permission_grants")
+}
+
+enum RoleChange {
+  GRANTED
+  REVOKED
+  SUSPENDED
+  RESTORED
+  PERMISSION_GRANTED
+  PERMISSION_REVOKED
+}
+
+/**
+ * Who gave whom which access, and when.
+ *
+ * The audit log records this too, but as one row among thousands of unrelated
+ * events. This table answers "how did this person get this access?" directly,
+ * survives audit-log retention trimming, and is what an administrator is shown
+ * before they change somebody else's permissions.
+ */
+model RoleAssignmentHistory {
+  id      String     @id @default(cuid())
+  userId  String
+  change  RoleChange
+  /** The Role, or the permission key, depending on `change`. */
+  subject String
+  reason  String?
+
+  actorId   String?
+  createdAt DateTime @default(now())
+
+  user  User? @relation("RoleSubject", fields: [userId], references: [id], onDelete: Cascade)
+  actor User? @relation("RoleActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@map("role_assignment_history")
 }
 
 model UserRole {
@@ -379,9 +584,9 @@ model Department {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  questions     DepartmentQuestion[]
-  applications  VolunteerApplication[]
-  scopes        UserDepartmentScope[]
+  questions      DepartmentQuestion[]
+  participations EditionParticipation[]
+  scopes         UserDepartmentScope[]
   shifts        Shift[]
   announcements Announcement[]
 
@@ -508,33 +713,41 @@ model VolunteerProfile {
   @@map("volunteer_profiles")
 }
 
+/**
+ * A person's application to volunteer — made **once**.
+ *
+ * A volunteer does not re-apply every edition. They apply, they are approved,
+ * and thereafter they return each edition to say they are available. That is
+ * why this row is unique per user and why approval lives here rather than on
+ * the per-edition record: `EditionParticipation`.
+ *
+ * The name is right, and always was. What was wrong was that this table used to
+ * be created afresh every edition, dragging a returning volunteer back through
+ * eight steps to re-enter a surname that had not changed.
+ *
+ * What stays here is what does not change between editions: who the person is,
+ * why they want to serve, who to call in an emergency, and whether the
+ * organisation has accepted them. What moves is anything they decide anew each
+ * time — department, availability, consents.
+ */
 model VolunteerApplication {
   id             String            @id @default(cuid())
+  /// `MMP-2027-000123`. Internal; the number a volunteer quotes is `User.mmpCode`.
   registrationId String            @unique
-  userId         String
-  departmentId   String?
+  /// One application per person. This is the whole point of the model.
+  userId         String            @unique
   status         ApplicationStatus @default(DRAFT)
   currentStep    Int               @default(1)
 
   /// Autosaved wizard state for an in-progress draft. Cleared on submission.
   draftData Json?
 
-  // Step 7 — discovery & motivation
+  // Discovery & motivation — asked once.
   discoverySource String?
   discoveryOther  String?
   whyVolunteer    String?
   skillsExperience String?
   additionalInfo   String?
-
-  // Step 6 — availability summary
-  availableOvernight Boolean?
-
-  // Step 9 — consents (each stored with the time it was given)
-  consentAccurate       Boolean   @default(false)
-  consentTerms          Boolean   @default(false)
-  consentDataProcessing Boolean   @default(false)
-  consentCommunication  Boolean   @default(false)
-  consentedAt           DateTime?
 
   submittedAt    DateTime?
   reviewedById   String?
@@ -547,27 +760,97 @@ model VolunteerApplication {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  department    Department?            @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  answers       ApplicationAnswer[]
-  availability  VolunteerAvailability[]
-  emergency     EmergencyContact?
-  health        ApplicationHealthInfo?
-  documents     VolunteerDocument[]
-  statusHistory ApplicationStatusHistory[]
-  notes         AdminNote[]
-  assignments   ShiftAssignment[]
+  user           User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emergency      EmergencyContact?
+  health         ApplicationHealthInfo?
+  documents      VolunteerDocument[]
+  statusHistory  ApplicationStatusHistory[]
+  notes          AdminNote[]
+  participations EditionParticipation[]
 
   @@index([status])
-  @@index([departmentId, status])
   @@index([submittedAt])
   @@map("volunteer_applications")
 }
 
-model ApplicationAnswer {
+/**
+ * Where a volunteer has got to in one edition.
+ *
+ * Approval is not repeated here — it belongs to the person and was granted
+ * once. This records what they decide anew each time: which department, when
+ * they can serve, and the consents they give for *this* edition.
+ */
+enum ParticipationStatus {
+  /// Said they are available. The ordinary state between confirming and the rota.
+  SIGNED_UP
+  ASSIGNED
+  CHECKED_IN
+  COMPLETED
+  /// Told us they can no longer serve this time. Their approval is untouched.
+  WITHDRAWN
+}
+
+/**
+ * One approved volunteer, in one edition.
+ *
+ * Unique on `(applicationId, edition)`: a volunteer takes part in an edition
+ * once, and confirming twice must update rather than duplicate.
+ *
+ * Deliberately kept apart from `PreviousEditionParticipation`, which holds
+ * imported legacy history. That table stores department as free text because
+ * the 2022–2026 exports carry fifteen unnormalised department names; this one
+ * references a real department row. Merging them would mean either losing the
+ * legacy strings or weakening this foreign key, and both are worse than two
+ * tables with one clear difference between them.
+ */
+model EditionParticipation {
   id            String @id @default(cuid())
   applicationId String
-  questionId    String
+  /// "2027". Matches `eventConfig.edition`.
+  edition       String
+  year          Int?
+
+  departmentId String?
+  status       ParticipationStatus @default(SIGNED_UP)
+
+  /// Availability summary; the dates themselves are in `VolunteerAvailability`.
+  availableOvernight Boolean?
+
+  // Consents, re-taken every edition and each stored with the time it was given.
+  consentAccurate       Boolean   @default(false)
+  consentTerms          Boolean   @default(false)
+  consentDataProcessing Boolean   @default(false)
+  consentCommunication  Boolean   @default(false)
+  consentedAt           DateTime?
+
+  /// When the volunteer confirmed they are taking part this edition.
+  confirmedAt DateTime?
+  withdrawnAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  application  VolunteerApplication    @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  department   Department?             @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  availability VolunteerAvailability[]
+  answers      ApplicationAnswer[]
+  assignments  ShiftAssignment[]
+
+  @@unique([applicationId, edition])
+  @@index([edition, status])
+  @@index([departmentId, edition])
+  @@map("edition_participations")
+}
+
+/// An answer to a department-specific question, for one edition.
+///
+/// Keyed to the participation, not the application: a volunteer who serves in
+/// Media one edition and Medical the next has answered two different sets of
+/// questions, and neither set should overwrite the other.
+model ApplicationAnswer {
+  id              String @id @default(cuid())
+  participationId String
+  questionId      String
 
   valueText   String?
   valueNumber Decimal? @db.Decimal(12, 2)
@@ -578,12 +861,12 @@ model ApplicationAnswer {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  application VolunteerApplication     @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  question    DepartmentQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  document    VolunteerDocument?       @relation("AnswerDocument", fields: [documentId], references: [id], onDelete: SetNull)
-  options     ApplicationAnswerOption[]
+  participation EditionParticipation     @relation(fields: [participationId], references: [id], onDelete: Cascade)
+  question      DepartmentQuestion       @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  document      VolunteerDocument?       @relation("AnswerDocument", fields: [documentId], references: [id], onDelete: SetNull)
+  options       ApplicationAnswerOption[]
 
-  @@unique([applicationId, questionId])
+  @@unique([participationId, questionId])
   @@index([questionId])
   @@map("application_answers")
 }
@@ -602,16 +885,17 @@ model ApplicationAnswerOption {
   @@map("application_answer_options")
 }
 
+/// When a volunteer can serve in one edition — the thing they come back to say.
 model VolunteerAvailability {
-  id            String      @id @default(cuid())
-  applicationId String
-  date          DateTime    @db.Date
-  period        ShiftPeriod
-  note          String?
+  id              String      @id @default(cuid())
+  participationId String
+  date            DateTime    @db.Date
+  period          ShiftPeriod
+  note            String?
 
-  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  participation EditionParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
 
-  @@unique([applicationId, date, period])
+  @@unique([participationId, date, period])
   @@map("volunteer_availability")
 }
 
@@ -719,17 +1003,18 @@ model Shift {
   @@map("shifts")
 }
 
+/// A shift given to a volunteer. Shifts belong to an edition by definition.
 model ShiftAssignment {
-  id            String   @id @default(cuid())
-  shiftId       String
-  applicationId String
-  assignedById  String?
-  createdAt     DateTime @default(now())
+  id              String   @id @default(cuid())
+  shiftId         String
+  participationId String
+  assignedById    String?
+  createdAt       DateTime @default(now())
 
-  shift       Shift                @relation(fields: [shiftId], references: [id], onDelete: Cascade)
-  application VolunteerApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  shift         Shift                @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  participation EditionParticipation @relation(fields: [participationId], references: [id], onDelete: Cascade)
 
-  @@unique([shiftId, applicationId])
+  @@unique([shiftId, participationId])
   @@map("shift_assignments")
 }
 
@@ -744,11 +1029,112 @@ model Announcement {
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
 
+  /**
+   * Lifecycle.
+   *
+   * `publishedAt` is kept as the single fact about *when* something went live —
+   * the volunteer dashboard already reads it and must keep working unchanged.
+   * `status` records intent, which a timestamp cannot: a draft and a scheduled
+   * post both have no `publishedAt`, and an expired one has the same
+   * `publishedAt` it always had.
+   */
+  status       AnnouncementStatus @default(DRAFT)
+  priority     AnnouncementPriority @default(NORMAL)
+  /** When a scheduled announcement should go live. */
+  scheduledFor DateTime?
+  /** After this the announcement stops being shown. Null means indefinite. */
+  expiresAt    DateTime?
+
+  /** Where it appears. Email delivery is opt-in per announcement. */
+  showOnDashboard Boolean @default(true)
+  showAsBanner    Boolean @default(false)
+  sendEmail       Boolean @default(false)
+  /** Overrides the default subject when the announcement is emailed. */
+  emailSubject    String?
+
+  archivedAt   DateTime?
+  updatedById  String?
+
   department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   createdBy  User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  revisions  AnnouncementRevision[]
+  deliveries AnnouncementDelivery[]
 
   @@index([publishedAt])
+  @@index([status, scheduledFor])
   @@map("announcements")
+}
+
+enum AnnouncementStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  EXPIRED
+  ARCHIVED
+}
+
+enum AnnouncementPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/**
+ * A snapshot of an announcement's wording before it was changed.
+ *
+ * Written on every edit rather than diffed on read: an announcement can be
+ * emailed to thousands of people, and "what exactly did we send?" must be
+ * answerable afterwards even though the record has since been corrected.
+ */
+model AnnouncementRevision {
+  id             String   @id @default(cuid())
+  announcementId String
+  version        Int
+  title          String
+  body           String
+  /** The whole record at that moment, for fields not worth a column each. */
+  snapshot       Json
+  editedById     String?
+  createdAt      DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, version])
+  @@map("announcement_revisions")
+}
+
+/**
+ * One email-send attempt for one announcement.
+ *
+ * Counts only — no per-recipient row. An announcement to every volunteer would
+ * otherwise write thousands of rows nobody reads, and the operational question
+ * is "did it go out, and how many failed?", not "what happened to each
+ * address". Failures keep their addresses so they can be retried.
+ */
+model AnnouncementDelivery {
+  id             String   @id @default(cuid())
+  announcementId String
+
+  /** "email" today; "sms" if that is ever added. */
+  channel   String   @default("email")
+  /** True when this was a test send to the administrator only. */
+  isTest    Boolean  @default(false)
+
+  recipients Int      @default(0)
+  succeeded  Int      @default(0)
+  failed     Int      @default(0)
+  /** Addresses the provider rejected, so a retry knows who to chase. */
+  failures   Json?
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  triggeredById String?
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@index([announcementId, startedAt])
+  @@map("announcement_deliveries")
 }
 
 // ---------------------------------------------------------------------------
@@ -783,6 +1169,225 @@ model TestimonySubmission {
 }
 
 /// Email addresses collected by the "stay updated" form.
+/**
+ * Messages sent from the public contact page.
+ *
+ * Never rendered publicly — the only way to read one is through the admin inbox,
+ * which requires a permission. Stored rather than emailed onward so nothing is
+ * lost if mail delivery fails, and so the organisation has a record of what was
+ * asked and whether it was answered.
+ */
+model ContactMessage {
+  id        String          @id @default(cuid())
+  category  ContactCategory @default(GENERAL)
+  name      String
+  email     String
+  phone     String?
+  subject   String
+  message   String
+  status    ContactStatus   @default(NEW)
+
+  handledById String?
+  handledAt   DateTime?
+  handlerNote String?
+
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  handledBy User? @relation("ContactHandler", fields: [handledById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([category, createdAt])
+  @@map("contact_messages")
+}
+
+/**
+ * One CSV import of users from a previous edition.
+ *
+ * `fileChecksum` is what makes the whole operation idempotent: re-uploading the
+ * same file for the same edition is detected before any row is written, so a
+ * nervous administrator pressing import twice cannot double-create accounts.
+ */
+model MigrationBatch {
+  id        String @id @default(cuid())
+  /** Human-quotable identifier, e.g. MIG-2026-0007. */
+  reference String @unique
+  name      String
+
+  /** The edition these people took part in, as free text plus a parsed year. */
+  sourceEdition String
+  sourceYear    Int?
+  sourceNote    String?
+
+  originalFilename String
+  /** SHA-256 of the uploaded bytes. */
+  fileChecksum     String
+  /**
+   * Where the uploaded CSV is kept.
+   *
+   * A private storage key, never a path under ./public — the file is a list of
+   * thousands of people's names, emails and phone numbers, and must not be
+   * fetchable by anyone who guesses a URL. Cleared when the file is deleted
+   * under the retention policy, which is what `fileDeletedAt` records; the
+   * parsed rows survive in `MigratedUserRecord.sourceData` so a failed import
+   * can still be explained and retried without the original.
+   */
+  storageKey    String?
+  fileSizeBytes Int?
+  fileDeletedAt DateTime?
+
+  /** Header row → canonical field name, as chosen by the administrator. */
+  columnMapping    Json
+
+  sendInvitations Boolean @default(false)
+
+  status MigrationBatchStatus @default(DRAFT)
+
+  totalRows   Int @default(0)
+  validRows   Int @default(0)
+  warningRows Int @default(0)
+  invalidRows Int @default(0)
+  createdRows Int @default(0)
+  matchedRows Int @default(0)
+  skippedRows Int @default(0)
+  failedRows  Int @default(0)
+
+  createdById String?
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  createdBy User?                 @relation("MigrationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  records   MigratedUserRecord[]
+  jobs      ImportJob[]
+  participations PreviousEditionParticipation[]
+
+  // The same file twice for the same edition is the same import.
+  @@unique([fileChecksum, sourceEdition])
+  @@index([status, createdAt])
+  @@map("migration_batches")
+}
+
+/**
+ * One row of one CSV, kept for the life of the batch.
+ *
+ * `sourceData` holds the raw row so a failed import can be explained and
+ * retried without the original file, which is deleted on a retention schedule.
+ */
+model MigratedUserRecord {
+  id       String @id @default(cuid())
+  batchId  String
+  rowNumber Int
+
+  sourceData Json
+
+  /** Lower-cased and trimmed. The only key matching is performed on. */
+  normalisedEmail String
+  firstName       String?
+  lastName        String?
+  phone           String?
+  previousRegistrationId String?
+  previousDepartment     String?
+
+  action MigrationRowAction @default(CREATE)
+  status MigrationRowStatus @default(PENDING)
+  /** Field-level messages: [{ field, level, message }]. */
+  validationMessages Json?
+
+  matchedUserId String?
+
+  invitationStatus InvitationStatus @default(NOT_QUEUED)
+  invitedAt        DateTime?
+  invitationError  String?
+  /** Set once, so a retried job never sends a second invitation. */
+  invitationSentKey String? @unique
+
+  activatedAt       DateTime?
+  profileReviewedAt DateTime?
+  excludedFromInvites Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  batch       MigrationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  matchedUser User?          @relation("MigratedRecordUser", fields: [matchedUserId], references: [id], onDelete: SetNull)
+
+  // A row number is unique within its batch, which makes re-processing a
+  // chunk safe: the upsert target is deterministic.
+  @@unique([batchId, rowNumber])
+  @@index([normalisedEmail])
+  @@index([batchId, status])
+  @@index([invitationStatus])
+  @@map("migrated_user_records")
+}
+
+/**
+ * Participation in an earlier edition.
+ *
+ * Deliberately its own table rather than a VolunteerApplication: a migrated
+ * person has *not* applied for the current edition, and representing history as
+ * a current application would corrupt every count on the dashboard.
+ */
+model PreviousEditionParticipation {
+  id     String @id @default(cuid())
+  userId String
+  edition String
+  year    Int?
+
+  previousDepartment     String?
+  previousRegistrationId String?
+  metadata               Json?
+
+  batchId   String?
+  createdAt DateTime @default(now())
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batch MigrationBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  // One participation record per person per edition, so a re-run updates
+  // rather than accumulating duplicates.
+  @@unique([userId, edition])
+  @@index([edition])
+  @@map("previous_edition_participations")
+}
+
+/**
+ * Database-backed job queue.
+ *
+ * There is no Redis in this stack and adding one for a few thousand rows would
+ * be a large operational cost for little gain. PostgreSQL already gives the
+ * two things a queue needs — durability and `SELECT ... FOR UPDATE SKIP LOCKED`
+ * for safe concurrent claiming — so the queue lives here.
+ */
+model ImportJob {
+  id      String @id @default(cuid())
+  batchId String
+  kind    String // "import" | "invite"
+
+  status     JobStatus @default(PENDING)
+  /** Rows [offset, offset + size) of the batch. */
+  offset     Int       @default(0)
+  size       Int       @default(100)
+  attempts   Int       @default(0)
+  maxAttempts Int      @default(3)
+  lastError  String?
+
+  claimedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  batch MigrationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  // One job per chunk per kind — the guard against queueing a batch twice.
+  @@unique([batchId, kind, offset])
+  @@index([status, createdAt])
+  @@map("import_jobs")
+}
+
 model NewsletterSubscriber {
   id             String    @id @default(cuid())
   email          String    @unique

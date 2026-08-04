@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import { Afacad, Figtree } from 'next/font/google'
-import { siteConfig } from '@/config/site'
+import { eventConfig, siteConfig } from '@/config/site'
 import './globals.css'
 
 /**
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
     template: '%s · MMPraise Volunteers',
   },
   description:
-    "Register to volunteer at the 84 Hours Marathon Messiah's Praise — join a department, tell us how you can serve, and manage your volunteer profile.",
+    `Register to volunteer at the ${eventConfig.editionName} — join a department, tell us how you can serve, and manage your volunteer profile.`,
   robots: { index: true, follow: true },
 }
 

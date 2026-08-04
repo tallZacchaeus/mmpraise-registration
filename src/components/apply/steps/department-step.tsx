@@ -6,7 +6,7 @@ import { saveDepartmentAction } from '@/app/(volunteer)/apply/actions'
 import { QuestionField } from '@/components/apply/question-field'
 import { StepShell } from '@/components/apply/step-shell'
 import { useStepForm } from '@/components/apply/use-step-form'
-import { Alert, Badge, Skeleton } from '@/components/ui/primitives'
+import { Alert, Skeleton } from '@/components/ui/primitives'
 import { Field } from '@/components/ui/form'
 import { cn } from '@/lib/utils'
 import { departmentSchema, type DepartmentFormValues } from '@/lib/validation/registration'
@@ -25,7 +25,6 @@ type DepartmentOption = {
   description: string | null
   capacity: number | null
   applied: number
-  isFull: boolean
 }
 
 /**
@@ -128,14 +127,12 @@ export function DepartmentStep({
         <div className="grid gap-3 sm:grid-cols-2">
           {departments.map((department) => {
             const checked = selectedId === department.id
-            const disabled = department.isFull && !checked
             return (
               <label
                 key={department.id}
                 className={cn(
                   'flex cursor-pointer items-start gap-3 rounded-card border p-4 transition-colors',
                   checked ? 'border-primary bg-primary-subtle' : 'border-line-strong hover:border-muted',
-                  disabled && 'cursor-not-allowed opacity-60',
                 )}
               >
                 <input
@@ -143,7 +140,6 @@ export function DepartmentStep({
                   name="departmentId"
                   value={department.id}
                   checked={checked}
-                  disabled={disabled}
                   onChange={() => {
                     // Switching department discards answers to the previous one.
                     form.setValue('departmentId', department.id)
@@ -157,15 +153,20 @@ export function DepartmentStep({
                 <span className="min-w-0">
                   <span className="flex flex-wrap items-center gap-2">
                     <span className="font-display text-base font-bold uppercase text-ink">{department.name}</span>
-                    {department.isFull && <Badge tone="warning">Full</Badge>}
                   </span>
                   {department.description && (
                     <span className="mt-1 block text-sm text-muted">{department.description}</span>
                   )}
-                  {department.capacity && (
+                  {/*
+                    How many have chosen this department — for orientation, not
+                    as a limit. There is no fixed number of volunteers a
+                    department needs, so nothing here closes one or discourages
+                    a choice.
+                  */}
+                  {department.applied > 0 && (
                     <span className="mt-2 flex items-center gap-1.5 text-xs text-muted">
                       <Users aria-hidden className="size-3.5" />
-                      {department.applied} of {department.capacity} places taken
+                      {department.applied} {department.applied === 1 ? 'volunteer' : 'volunteers'} so far
                     </span>
                   )}
                 </span>

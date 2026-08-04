@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { CheckCircle2, Download, LayoutDashboard } from 'lucide-react'
 import { Alert, Badge, buttonClass, Card, CardBody, CardHeader } from '@/components/ui/primitives'
+import { eventConfig } from '@/config/site'
 import { requireUser } from '@/lib/auth/rbac'
 import { db } from '@/lib/db'
 import { STATUS_LABELS, STATUS_TONES } from '@/lib/applications/status'
@@ -13,10 +14,20 @@ export const metadata: Metadata = { title: 'Registration submitted' }
 export default async function SubmittedPage() {
   const user = await requireUser()
 
+  const account = await db.user.findUniqueOrThrow({
+    where: { id: user.id },
+    select: { mmpCode: true },
+  })
+
   const application = await db.volunteerApplication.findFirst({
     where: { userId: user.id, status: { not: 'DRAFT' } },
     orderBy: { submittedAt: 'desc' },
-    include: { department: { select: { name: true } } },
+    include: {
+      participations: {
+        where: { edition: eventConfig.edition },
+        select: { department: { select: { name: true } } },
+      },
+    },
   })
 
   if (!application) redirect('/apply')
@@ -39,12 +50,12 @@ export default async function SubmittedPage() {
 
           <dl className="grid gap-4 rounded-card border border-line bg-surface-sunken p-5 text-left sm:grid-cols-3">
             <div>
-              <dt className="text-sm text-muted">Registration ID</dt>
-              <dd className="font-display text-lg font-bold text-ink">{application.registrationId}</dd>
+              <dt className="text-sm text-muted">MMP number</dt>
+              <dd className="font-display text-lg font-bold text-ink">{account.mmpCode ?? '—'}</dd>
             </div>
             <div>
               <dt className="text-sm text-muted">Department</dt>
-              <dd className="font-medium text-ink">{application.department?.name ?? '—'}</dd>
+              <dd className="font-medium text-ink">{application.participations[0]?.department?.name ?? '—'}</dd>
             </div>
             <div>
               <dt className="text-sm text-muted">Status</dt>

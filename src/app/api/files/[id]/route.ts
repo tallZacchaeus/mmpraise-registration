@@ -20,7 +20,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { id } = await params
   const document = await db.volunteerDocument.findUnique({
     where: { id },
-    include: { application: { select: { departmentId: true } } },
+    include: {
+      application: {
+        select: { participations: { select: { departmentId: true } } },
+      },
+    },
   })
 
   if (!document) return new NextResponse('Not found', { status: 404 })
@@ -31,8 +35,19 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!allowed && can(user, 'application:view_all')) allowed = true
 
   if (!allowed && can(user, 'application:view_department')) {
+    /*
+     * Any edition the volunteer has served in, not just the current one — a
+     * department head must be able to open a document belonging to somebody
+     * who served with them last time and has not yet chosen for this edition.
+     */
     const scope = departmentScope(user)
-    allowed = Boolean(document.application?.departmentId && scope?.includes(document.application.departmentId))
+    allowed = Boolean(
+      scope &&
+        document.application?.participations.some(
+          (participation) =>
+            participation.departmentId !== null && scope.includes(participation.departmentId),
+        ),
+    )
   }
 
   if (!allowed) return new NextResponse('Forbidden', { status: 403 })

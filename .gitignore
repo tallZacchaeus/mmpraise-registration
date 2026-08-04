@@ -50,3 +50,12 @@ next-env.d.ts
 /test-results
 /playwright-report
 /coverage
+
+# Legacy participant data — thousands of real people's names, emails and phone
+# numbers. These are working files for the migration and must never enter the
+# repository; the import wizard is how they reach the database.
+users-export-*.csv
+t2024-export-*.csv
+mmpraise-previous-participants.csv
+mmpraise-participants-needing-correction.csv
+DIRECTORIES.xlsx

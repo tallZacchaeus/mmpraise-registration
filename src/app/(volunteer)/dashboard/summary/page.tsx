@@ -41,8 +41,8 @@ export default async function SummaryPage() {
             <h1 className="text-2xl">MMPraise volunteer registration</h1>
             <dl className="mt-4 grid gap-4 sm:grid-cols-3">
               <div>
-                <dt className="text-sm text-muted">Registration ID</dt>
-                <dd className="font-display text-lg font-bold text-ink">{state.application.registrationId}</dd>
+                <dt className="text-sm text-muted">MMP number</dt>
+                <dd className="font-display text-lg font-bold text-ink">{state.user?.mmpCode ?? '—'}</dd>
               </div>
               <div>
                 <dt className="text-sm text-muted">Status</dt>
