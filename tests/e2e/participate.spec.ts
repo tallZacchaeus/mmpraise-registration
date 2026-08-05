@@ -70,38 +70,55 @@ test.describe('edition confirmation', () => {
     const questionSection = page.locator('section', {
       has: page.getByRole('heading', { name: /department questions/i }),
     })
-    // Up to three passes, because answering one question can reveal a
-    // conditional follow-up that also needs an answer.
-    for (let pass = 0; pass < 3; pass += 1) {
-      const unanswered = await questionSection
-        .locator('input[type="radio"]')
-        .evaluateAll((nodes) => [
-          ...new Set(
-            (nodes as HTMLInputElement[])
-              .filter((n) => !nodes.some((m) => (m as HTMLInputElement).name === n.name && (m as HTMLInputElement).checked))
-              .map((n) => n.name),
-          ),
-        ])
-      // Positions rather than names: the answer inputs are named
-      // `answers.<key>`, and a dot is not a valid CSS id selector.
-      const emptySelects = await questionSection
-        .locator('select')
-        .evaluateAll((nodes) =>
-          (nodes as HTMLSelectElement[])
-            .map((node, index) => (node.value ? -1 : index))
-            .filter((index) => index >= 0),
-        )
+    /*
+     * Answer-then-recount inside expect.poll: a conditional follow-up mounts
+     * *asynchronously* after its parent is answered, so a fixed number of
+     * passes races the render — under load, the follow-up can appear after
+     * the last pass has already looked. Polling settles by definition: each
+     * retry answers whatever is unanswered right now, and the loop only ends
+     * when a look finds nothing left.
+     */
+    await expect
+      .poll(
+        async () => {
+          const unanswered = await questionSection
+            .locator('input[type="radio"]')
+            .evaluateAll((nodes) => [
+              ...new Set(
+                (nodes as HTMLInputElement[])
+                  .filter(
+                    (n) =>
+                      !nodes.some(
+                        (m) =>
+                          (m as HTMLInputElement).name === n.name &&
+                          (m as HTMLInputElement).checked,
+                      ),
+                  )
+                  .map((n) => n.name),
+              ),
+            ])
+          // Positions rather than names: the answer inputs are named
+          // `answers.<key>`, and a dot is not a valid CSS id selector.
+          const emptySelects = await questionSection
+            .locator('select')
+            .evaluateAll((nodes) =>
+              (nodes as HTMLSelectElement[])
+                .map((node, index) => (node.value ? -1 : index))
+                .filter((index) => index >= 0),
+            )
 
-      if (unanswered.length === 0 && emptySelects.length === 0) break
-
-      for (const name of unanswered) {
-        await questionSection.locator(`input[type="radio"][name="${name}"]`).first().check()
-      }
-      for (const index of emptySelects) {
-        // Index 1 skips the "Choose…" placeholder every select carries.
-        await questionSection.locator('select').nth(index).selectOption({ index: 1 })
-      }
-    }
+          for (const name of unanswered) {
+            await questionSection.locator(`input[type="radio"][name="${name}"]`).first().check()
+          }
+          for (const index of emptySelects) {
+            // Index 1 skips the "Choose…" placeholder every select carries.
+            await questionSection.locator('select').nth(index).selectOption({ index: 1 })
+          }
+          return unanswered.length + emptySelects.length
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(0)
 
     // Dates, periods, overnight.
     const dateBoxes = page.locator('input[name="availableDates"]')
