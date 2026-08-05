@@ -52,10 +52,10 @@ next-env.d.ts
 /coverage
 
 # Legacy participant data — thousands of real people's names, emails and phone
-# numbers. These are working files for the migration and must never enter the
-# repository; the import wizard is how they reach the database.
+# numbers. The raw exports and directories stay out of the repository.
+# Exception (owner's decision, 2026-08-05): mmpraise-previous-participants.csv —
+# the cleaned import file — is committed so it travels with the deployment.
 users-export-*.csv
 t2024-export-*.csv
-mmpraise-previous-participants.csv
 mmpraise-participants-needing-correction.csv
 DIRECTORIES.xlsx
