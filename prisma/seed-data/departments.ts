@@ -352,4 +352,46 @@ export const DEPARTMENTS: DepartmentSeed[] = [
       },
     ],
   },
+
+  /*
+   * Teams carried over from the legacy records by name, by decision
+   * (2026-08-05): every department name volunteers served under since 2022
+   * remains a team in its own right rather than being folded into a broader
+   * one — with a single exception, "Security/Protocol", which continues as
+   * Protocol because protocol (VIP handling) was never the same job as
+   * security. See docs/DEPARTMENT-MAPPING.md.
+   *
+   * No question sets yet; each starts from a blank slate (or a copied set —
+   * the questions screen can copy another department's questions in).
+   */
+  {
+    slug: 'protocol',
+    name: 'Protocol',
+    description: 'VIP reception, hosting and protocol — distinct from Security.',
+    questions: [],
+  },
+  {
+    slug: 'accommodation-logistics',
+    name: 'Accommodation Logistics',
+    description: 'Housing arrangements for volunteers and guests during the marathon.',
+    questions: [],
+  },
+  {
+    slug: 'transportation-logistics',
+    name: 'Transportation Logistics',
+    description: 'Movement of people and equipment to, from and around the venue.',
+    questions: [],
+  },
+  {
+    slug: 'registration-unit',
+    name: 'Registration Unit',
+    description: 'On-site registration support, alongside the Registration Team.',
+    questions: [],
+  },
+  {
+    slug: 'medical-officer',
+    name: 'Medical Officer',
+    description: 'Qualified medical officers serving within the medical provision.',
+    questions: [],
+  },
 ]

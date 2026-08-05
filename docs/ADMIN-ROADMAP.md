@@ -241,25 +241,18 @@ records carry each person's own year.
 
 ---
 
-## Phase 3 — Legacy department mapping
+## Phase 3 — Legacy department mapping — **DECIDED and implemented**
 
-**Current state.** The export has **15** department names; the platform has 10.
-Several are plainly the same team recorded two ways:
+**Decision (2026-08-05).** Every legacy name continues as its own team —
+nothing merged. Sole exception: `Security/Protocol` → **Protocol** (VIP
+handling was never the same job as security). The platform now seeds 15
+departments; the mapping lives in `src/lib/migration/department-map.ts` with
+tests, and `docs/DEPARTMENT-MAPPING.md` records the confirmed table.
 
-- `Security/Protocol` (343) + `Security` (281)
-- `Registration Team` (271) + `Registration Unit` (123)
-- `Medical` (535) + `Medical Officer` (78)
-- `Logistics` (473) + `Accommodation Logistics` (173) + `Transportation Logistics` (108)
-
-`Volunteers Praise Team` (4,902) and `Welfare` (3,238) are 58% of the file.
-
-**Scope.** A mapping table from legacy name → current department, applied at
-import, with unmapped names recorded verbatim rather than dropped. Store the
-original string alongside the mapped id — the legacy name is historical fact and
-must survive.
-
-**Blocked on.** Somebody who knows the teams must confirm the merges. Fifteen
-rows, and it should not be guessed at.
+The legacy string is still stored verbatim on every imported participation —
+the mapping decides association, never rewrites history — and an unknown name
+still imports with the text kept and no department attached, counted in the
+validation report.
 
 ---
 
@@ -438,8 +431,10 @@ details?
 **Current state.** Split-view helpdesk (see the Completed table). Delivered:
 read state, priority, advisory assignment, spam/test tags, note timeline,
 duplicate grouping, related volunteer account, ageing indicators, counted bulk
-resolve, `mailto:` replies. Still open here: response templates, integrated
-reply, analytics — all waiting on the reply-channel decision below.
+resolve, `mailto:` replies. **Reply-channel decided (2026-08-05): mailbox for
+now, platform later** — so `mailto:` is the design, not a stopgap. Still open
+here: response templates, analytics; integrated reply returns when the
+platform half of that decision is taken up.
 
 **Scope.** Inbox split layout (list · detail · contact profile · timeline) ·
 search, filters, pagination · read/unread · priority · assignment · tags ·
@@ -462,12 +457,17 @@ changes the data model — decide before writing any of it.
 list/editor/preview, draft → scheduled → published → expired → archived,
 publish/schedule/expire with a lazy clock instead of a scheduler, test email,
 delivery statistics with failed addresses recorded, clone, version history,
-created-by and modified-by. Still open here: audience filters beyond the
-current three (needs schema), scheduled *email* sends and failed-email retry
-(both belong to the worker pass — reuse the migration queue, do not introduce
-a second scheduler).
+created-by and modified-by.
 
-**Blocked on** (for the email items). Sender name, sender address, reply-to.
+**Email decided (2026-08-05): announcements are never emailed in full.** The
+email is a notification — title plus a short preview — and the full message is
+read signed in, on the dashboard. That also dissolved most of the sender
+question: notifications send from the platform's existing configured sender,
+like every other system email.
+
+Still open here: audience filters beyond the current three (needs schema),
+scheduled *notification* sends and failed-email retry (both belong to the
+worker pass — reuse the migration queue, do not introduce a second scheduler).
 
 ---
 
@@ -541,9 +541,9 @@ Remaining: permission-controlled export, detail links through to the related
 record, role/entity/result filters beyond the current set, and retention
 controls.
 
-**Blocked on.** Audit retention period — still needed before retention controls
-can be built. Nothing is deleted today, which is the safe default in the
-meantime.
+**Retention decided (2026-08-05, delegated).** Nothing is deleted for now;
+when the scheduler lands, keep everything 24 months and security-view entries
+6 years, purging with an audited run. See the settled-decisions table.
 
 ---
 
@@ -595,17 +595,13 @@ Answering these is faster than discovering them mid-phase.
 |---|---|
 | Do sensitive departments (Medical, Security) require sign-off when an already-approved volunteer switches into them? | 1 |
 | Is `MMP2214059` genuinely the next free code? | 1 |
-| The 15 → 10 legacy department mapping | 3 |
 | Is accommodation managed in this platform for 2027? | 4 |
 | Invitation wording · sender identity · wave schedule | 5 |
 | Who may change a locked-out volunteer's email address? | 5 |
 | Reviewer assignment advisory or exclusive? | 7 |
 | Is the per-edition registration ID retired from volunteer-facing screens, or renamed? | 1, 7 |
 | What counts as a duplicate testimony? Who sees contact details? | 8 |
-| Replies from the platform or a mailbox? | 9 |
-| May a super admin remove their own last super-admin role? | 12 |
 | May administrators edit event dates? | 13 |
-| Audit retention period | 14 |
 | Uploaded-CSV retention (currently 30 days, chosen not confirmed) | — |
 
 ### Settled
@@ -618,6 +614,11 @@ Answering these is faster than discovering them mid-phase.
 | Are consents re-taken each edition? | **Yes.** Consents live on the participation. |
 | MMP Code format | **Unchanged.** Continue the sequence from `MMP2214059` as a 7-digit integer. |
 | Is the year prefix implemented going forward? | **No.** It was specified but never built — all 13,973 codes use `22` regardless of year, and the registration year is not recoverable from the export. Switching it on for 2027 only would make the field true for new people and false for 13,969 existing ones. |
+| The legacy department mapping (2026-08-05) | **Every legacy name continues as its own team** — nothing is folded together. One exception: `Security/Protocol` → **Protocol**, because protocol (VIP handling) was never the same job as security. Five new departments seeded (Protocol, Accommodation Logistics, Transportation Logistics, Registration Unit, Medical Officer); mapping in `src/lib/migration/department-map.ts`; doc: `docs/DEPARTMENT-MAPPING.md`. |
+| Replies from the platform or a mailbox? (2026-08-05) | **Mailbox for now, platform later.** The helpdesk's `Reply by email` stays `mailto:`; integrated reply waits for the platform decision to be revisited. |
+| Are announcements emailed? (2026-08-05) | **Never in full.** The email is a notification — title plus a short preview — and the volunteer signs in to read the announcement on their dashboard. Enforced by unit test (`tests/unit/announcement-email.test.ts`): a regression that pastes the body back into the mail fails the suite. |
+| May a super admin remove their own last super-admin role? (2026-08-05, delegated) | **No.** You cannot remove your own super-admin role, change your own permissions, or suspend your own access; another super administrator can. The last *usable* super administrator can be neither suspended nor disabled. |
+| Audit retention period (2026-08-05, delegated) | **Nothing is deleted for now; revisit at 24 months.** The log is append-only and the platform has not run two years yet, so no purge exists to get wrong. When the scheduler lands (Phase 15), implement retention as: keep everything 24 months, keep security-view entries (personal-data access, permission changes) 6 years, then purge with an audited run. |
 | Merge the two export files? | **Not needed.** `t2024` is a byte-identical subset of `users`. |
 
 Still outstanding from earlier work: the country count (homepage says 82, About

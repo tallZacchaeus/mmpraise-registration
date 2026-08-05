@@ -150,18 +150,41 @@ export function statusChangeEmail(params: {
   }
 }
 
-export function announcementEmail(params: { name: string; title: string; body: string; loginUrl: string }): MailMessage {
-  const paragraphs = params.body
-    .split(/\n{2,}/)
-    .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
-    .join('')
+/** First sentences of an announcement, cut at a word, for the email preview. */
+export function announcementPreview(body: string, limit = 160): string {
+  const flat = body.replace(/\s+/g, ' ').trim()
+  if (flat.length <= limit) return flat
+  const cut = flat.slice(0, limit)
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 80))}…`
+}
 
-  const html = layout(params.title, `<p>Hello ${escapeHtml(params.name)},</p>${paragraphs}${button(params.loginUrl, 'Open your dashboard')}`)
+/**
+ * A notification that an announcement is waiting — never the announcement.
+ *
+ * The full message lives on the dashboard and the email carries only the title
+ * and a preview, by decision: volunteers sign in to read it. That keeps the
+ * portal the single place an announcement exists (an edit or expiry is never
+ * contradicted by a stale copy in ten thousand inboxes) and keeps the mail
+ * itself low-value if forwarded or mis-sent.
+ */
+export function announcementEmail(params: { name: string; title: string; body: string; loginUrl: string }): MailMessage {
+  const preview = announcementPreview(params.body)
+
+  const html = layout(
+    params.title,
+    `<p>Hello ${escapeHtml(params.name)},</p>
+     <p>There is a new announcement for MMPraise volunteers:</p>
+     <p style="background:#fff1ea;border:1px solid #ffd3c2;border-radius:10px;padding:12px 16px;">
+       <strong>${escapeHtml(params.title)}</strong><br>${escapeHtml(preview)}
+     </p>
+     <p>Sign in to read the full announcement on your dashboard.</p>
+     ${button(params.loginUrl, 'Read it on your dashboard')}`,
+  )
   return {
     to: '',
     subject: `MMPraise volunteers — ${params.title}`,
     html,
-    text: `Hello ${params.name},\n\n${params.body}\n\nOpen your dashboard: ${params.loginUrl}`,
+    text: `Hello ${params.name},\n\nThere is a new announcement for MMPraise volunteers:\n\n${params.title}\n${preview}\n\nSign in to read the full announcement: ${params.loginUrl}`,
   }
 }
 

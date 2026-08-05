@@ -74,7 +74,7 @@ export function AnnouncementLifecycle({
       setMessage({
         tone: 'success',
         text: result.data.recipients
-          ? `Published, and emailed to ${result.data.recipients} volunteer${result.data.recipients === 1 ? '' : 's'}${result.data.failed ? ` — ${result.data.failed} failed, see delivery history` : ''}.`
+          ? `Published, and ${result.data.recipients} volunteer${result.data.recipients === 1 ? '' : 's'} notified by email${result.data.failed ? ` — ${result.data.failed} failed, see delivery history` : ''}.`
           : 'Published. It is on volunteer dashboards now.',
       })
       setSendEmail(false)
@@ -112,8 +112,8 @@ export function AnnouncementLifecycle({
                   <Checkbox
                     checked={sendEmail}
                     onChange={setSendEmail}
-                    label={`Also email all ${audienceCount}`}
-                    description="One email per volunteer, sent immediately. Use sparingly."
+                    label={`Also notify all ${audienceCount} by email`}
+                    description="The email carries the title and a short preview only — the full announcement is read signed in, on the dashboard."
                   />
                 </div>
               )}
