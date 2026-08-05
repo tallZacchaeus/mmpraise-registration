@@ -12,6 +12,7 @@
 - [ ] `SITE_DOMAIN` and `ACME_EMAIL` set (Docker deployments only)
 - [ ] Terms and privacy notice reviewed
 - [ ] Event name and dates set in Admin → Settings
+- [ ] Departments reviewed in Admin → Departments — all **15** seed open, including the five carried over from the legacy records (Protocol, Accommodation Logistics, Transportation Logistics, Registration Unit, Medical Officer); close any that should not take 2027 applications, and give them question sets (copy from another team as a start)
 - [ ] `npm run verify` passes, and `npx playwright test` passes against a **freshly started** dev server
 
 `assertProductionSafety()` in `src/lib/env.ts` refuses to start with a short secret, a non-HTTPS
@@ -99,13 +100,34 @@ docker compose --env-file .env.production up -d
 `NEXT_PUBLIC_*` value is compiled into the browser bundle at build time — omit the flag and the
 bundle ships with an empty site URL and every launch flag at its default.
 
-**Three services:**
+**Four services** (Postgres runs on the same box — decision 2026-08-05):
 
 | Service | What it does |
 |---|---|
+| `db` | PostgreSQL 16, data in the `pgdata` volume. Not exposed to the host — only the other services can reach it. Set `POSTGRES_PASSWORD` in `.env.production` and point `DATABASE_URL` at `postgresql://mmp:${POSTGRES_PASSWORD}@db:5432/mmp_registration`. **You own the backups** — put the `pg_dump` recipe below in cron on day one. |
 | `migrate` | Runs `prisma migrate deploy` once and exits. `app` waits for it to succeed, so the server never runs against a schema the code does not match. |
 | `app` | The Next.js standalone server. Not published to the host — only Caddy can reach it, so nobody can hit port 3000 on the public IP and bypass TLS. |
 | `caddy` | TLS termination. Obtains and renews the Let's Encrypt certificate itself; there is no certbot to schedule. |
+
+**Email (decision 2026-08-05: Resend).** Verify the sending domain in Resend,
+create an SMTP credential, and set:
+
+```
+SMTP_HOST=smtp.resend.com
+SMTP_PORT=465
+SMTP_SECURE=true
+SMTP_USER=resend
+SMTP_PASSWORD=<the Resend API key>
+MAIL_FROM=MMPraise Volunteers <volunteers@mmpraise.org>
+SUPPORT_EMAIL=volunteers@mmpraise.org
+```
+
+The backup recipe runs against the container:
+
+```bash
+docker compose --env-file .env.production exec db \
+  pg_dump -U mmp -d mmp_registration --format=custom > "/backups/mmp-$(date +%F).dump"
+```
 
 **Image layout.** `next.config.ts` sets `output: 'standalone'`, so the runtime image carries a
 self-contained server with only the modules it actually imports — no source tree and no dev

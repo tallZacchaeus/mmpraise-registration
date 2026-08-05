@@ -7,8 +7,12 @@ general; this is what to actually type.
 registration journey. Every other public destination says "Coming soon" — see *Launch scope* in
 `docs/DEPLOYMENT.md`.
 
-You already have the database, the file storage and the SMTP provider, so this is mostly
-configuration and one `docker compose` command.
+Decisions made 2026-08-05: **PostgreSQL runs on this same VPS** (the `db`
+service in `docker-compose.yml` — nothing to provision), and **Resend** sends
+the email. That leaves three accounts to have ready before starting: the VPS
+itself, a Resend account with the sending domain verified, and an
+S3-compatible bucket for uploads (Cloudflare R2's free tier is fine). The rest
+is configuration and one `docker compose` command.
 
 ---
 
@@ -81,10 +85,13 @@ Everything in the file needs a value. The ones that must not be left at their de
 | `NODE_ENV` | `production` |
 | `APP_URL` | The public HTTPS origin, e.g. `https://mmpraise.org` |
 | `APP_SECRET` | 48+ random characters. Generate one with the command below. |
-| `DATABASE_URL` | Your PostgreSQL connection string, with `?sslmode=require` |
+| `POSTGRES_PASSWORD` | A long random password for the on-box database. Generate it the same way as `APP_SECRET`. |
+| `DATABASE_URL` | Exactly `postgresql://mmp:<that password>@db:5432/mmp_registration` — the `db` hostname is the compose service. No `sslmode`: the connection never leaves Docker's internal network. |
 | `STORAGE_DRIVER` | `s3` |
-| `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT` | Your bucket. Keep it **private** — the app streams files through an authorising route, so public access is never needed. |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM` | Your email provider |
+| `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_ENDPOINT` | Your bucket (Cloudflare R2 works: region `auto`, endpoint from the R2 dashboard). Keep it **private** — the app streams files through an authorising route, so public access is never needed. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE` | Resend: `smtp.resend.com`, `465`, `true` |
+| `SMTP_USER`, `SMTP_PASSWORD` | Resend: literally `resend`, and an API key created in their dashboard |
+| `MAIL_FROM`, `SUPPORT_EMAIL` | `MMPraise Volunteers <volunteers@mmpraise.org>` — the domain must be verified in Resend first, or everything lands in spam or is refused |
 | `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` | The bootstrap administrator. Change the password after first sign-in. |
 | `NEXT_PUBLIC_SITE_URL` | Same as `APP_URL` |
 | `SITE_DOMAIN` | The bare domain for the certificate, e.g. `mmpraise.org` (no `https://`) |
@@ -125,8 +132,8 @@ Once, after the first successful deploy:
 docker compose --env-file .env.production run --rm migrate npx tsx prisma/seed.ts
 ```
 
-This creates the ten departments and their questions, the reference data (countries, states, RCCG
-structure) and one super administrator from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
+This creates the fifteen departments and their questions, the reference data (countries, states,
+RCCG structure) and one super administrator from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`.
 
 Then, immediately:
 
@@ -135,6 +142,11 @@ Then, immediately:
    officers can open health answers, and every one of those views is written to the audit log.
 3. Replace the seeded RCCG regions and provinces with the official structure
    (**Admin → Reference data**) — the seeded values are a placeholder.
+4. Review **Admin → Departments**: all fifteen teams seed open for applications, and the five
+   carried over from the legacy records (Protocol, Accommodation Logistics, Transportation
+   Logistics, Registration Unit, Medical Officer) have no question sets yet. Close any that should
+   not take 2027 volunteers, and give the rest questions — the questions screen can copy another
+   department's set as a starting point.
 
 ---
 
@@ -154,14 +166,17 @@ browser bundle.
 
 ## 8. Backups
 
-Your managed database's own snapshots are the first line, but take your own too — it is the only
-copy you control:
+The database lives on this box, so **these dumps are the only copy that exists**. Set this up the
+same day the site goes live, and copy the dumps somewhere off the VPS (the storage bucket works):
 
 ```bash
 # /etc/cron.daily/mmp-backup  (chmod +x)
 set -e
-. /home/mmp/app/.env.production
-pg_dump "$DATABASE_URL" --format=custom --file="/home/mmp/backups/mmp-$(date +%F).dump"
+mkdir -p /home/mmp/backups
+cd /home/mmp/app
+docker compose --env-file .env.production exec -T db \
+  pg_dump -U mmp -d mmp_registration --format=custom \
+  > "/home/mmp/backups/mmp-$(date +%F).dump"
 find /home/mmp/backups -name 'mmp-*.dump' -mtime +30 -delete
 ```
 

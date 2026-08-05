@@ -9,9 +9,11 @@
 # empty string and the browser bundle ships with no site URL and every feature
 # flag at its default.
 #
-# There is no database service here: the connection string in .env.production
-# points at your managed PostgreSQL. If you would rather run Postgres on this
-# same box, uncomment the `db` service at the bottom.
+# PostgreSQL runs on this same box as the `db` service (decision 2026-08-05),
+# with its data in the `pgdata` volume. DATABASE_URL in .env.production must be
+#   postgresql://mmp:${POSTGRES_PASSWORD}@db:5432/mmp_registration
+# Backups are your responsibility — the pg_dump recipe is in
+# docs/DEPLOYMENT.md, and it should run from cron on the host from day one.
 
 services:
   # One-shot: applies any migrations that are not yet in the database, then
@@ -29,6 +31,9 @@ services:
     env_file: .env.production
     command: npx prisma migrate deploy
     restart: 'no'
+    depends_on:
+      db:
+        condition: service_healthy
 
   app:
     build:
@@ -81,6 +86,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      db:
+        condition: service_healthy
     # Not published to the host: only Caddy may reach the app, so the port
     # cannot be hit directly on the VPS's public IP, bypassing TLS.
     expose:
@@ -119,27 +126,28 @@ services:
       driver: json-file
       options: { max-size: '10m', max-file: '5' }
 
-  # Uncomment only if you are not using a managed database. If you do, point
-  # DATABASE_URL at postgresql://mmp:PASSWORD@db:5432/mmp_registration and take
-  # responsibility for backups yourself — see docs/DEPLOYMENT.md.
-  #
-  # db:
-  #   image: postgres:16-alpine
-  #   restart: unless-stopped
-  #   environment:
-  #     POSTGRES_DB: mmp_registration
-  #     POSTGRES_USER: mmp
-  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
-  #   volumes:
-  #     - pgdata:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ['CMD-SHELL', 'pg_isready -U mmp -d mmp_registration']
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 5
+  # Deliberately not exposed to the host: only the other services on this
+  # compose network can reach it, so the database is never on the public IP.
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mmp_registration
+      POSTGRES_USER: mmp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mmp -d mmp_registration']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '5' }
 
 volumes:
   uploads:
   caddy_data:
   caddy_config:
-  # pgdata:
+  pgdata:
