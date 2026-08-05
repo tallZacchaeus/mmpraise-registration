@@ -1,8 +1,13 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { Pencil, Plus, Trash2, X } from 'lucide-react'
-import { deleteQuestionAction, saveQuestionAction } from '@/app/(admin)/admin/manage-actions'
+import { useRouter } from 'next/navigation'
+import { ArrowDown, ArrowUp, Pencil, Plus, Trash2, X } from 'lucide-react'
+import {
+  deleteQuestionAction,
+  reorderQuestionAction,
+  saveQuestionAction,
+} from '@/app/(admin)/admin/manage-actions'
 import { Alert, Badge, Button, Card, CardBody, CardHeader } from '@/components/ui/primitives'
 import { Checkbox, Field, SelectInput, TextArea, TextInput } from '@/components/ui/form'
 import type { QuestionDef } from '@/lib/questions/engine'
@@ -90,10 +95,14 @@ function toDraft(question: QuestionDef): Draft {
 export function QuestionEditor({
   departmentId,
   questions,
+  answerCounts = {},
 }: {
   departmentId: string
   questions: QuestionDef[]
+  /** Question id → answers given. Shown so a question is never retired blind. */
+  answerCounts?: Record<string, number>
 }) {
+  const router = useRouter()
   const [draft, setDraft] = useState<Draft | null>(null)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [message, setMessage] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null)
@@ -131,6 +140,7 @@ export function QuestionEditor({
       setErrors({})
       setDraft(null)
       setMessage({ tone: 'success', text: 'Question saved.' })
+      router.refresh()
     })
   }
 
@@ -142,6 +152,19 @@ export function QuestionEditor({
           ? { tone: 'success', text: 'Question removed. Questions that already have answers are retired instead of deleted.' }
           : { tone: 'danger', text: result.error },
       )
+      if (result.ok) router.refresh()
+    })
+  }
+
+  function move(id: string, direction: 'up' | 'down') {
+    setMessage(null)
+    startTransition(async () => {
+      const result = await reorderQuestionAction(id, direction)
+      if (!result.ok) {
+        setMessage({ tone: 'danger', text: result.error })
+        return
+      }
+      router.refresh()
     })
   }
 
@@ -167,8 +190,9 @@ export function QuestionEditor({
             <p className="text-sm text-muted">No questions yet. Add the first one.</p>
           ) : (
             <ol className="space-y-3">
-              {questions.map((question) => {
+              {questions.map((question, index) => {
                 const parent = questions.find((q) => q.id === question.parentQuestionId)
+                const answers = answerCounts[question.id] ?? 0
                 return (
                   <li
                     key={question.id}
@@ -176,12 +200,17 @@ export function QuestionEditor({
                   >
                     <div className="min-w-0">
                       <p className="font-medium text-ink">
-                        {question.sortOrder + 1}. {question.label}
+                        {index + 1}. {question.label}
                       </p>
                       <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                         <code className="rounded bg-surface-sunken px-1.5 py-0.5">{question.key}</code>
                         <Badge tone="neutral">{TYPES.find((t) => t.value === question.type)?.label}</Badge>
                         {question.isRequired && <Badge tone="brand">Required</Badge>}
+                        {answers > 0 && (
+                          <Badge tone="success">
+                            {answers} answer{answers === 1 ? '' : 's'}
+                          </Badge>
+                        )}
                         {parent && (
                           <Badge tone="info">
                             Shown when “{parent.label}” = {question.parentOptionValues.join(' or ')}
@@ -196,6 +225,26 @@ export function QuestionEditor({
                     </div>
 
                     <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={index === 0 || pending}
+                        aria-label={`Move “${question.label}” up`}
+                        onClick={() => move(question.id, 'up')}
+                      >
+                        <ArrowUp aria-hidden className="size-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={index === questions.length - 1 || pending}
+                        aria-label={`Move “${question.label}” down`}
+                        onClick={() => move(question.id, 'down')}
+                      >
+                        <ArrowDown aria-hidden className="size-4" />
+                      </Button>
                       <Button type="button" variant="ghost" size="sm" onClick={() => setDraft(toDraft(question))}>
                         <Pencil aria-hidden className="size-4" />
                         Edit
@@ -268,31 +317,24 @@ export function QuestionEditor({
                 />
               </Field>
 
-              <div className="grid gap-5 sm:grid-cols-2">
-                <Field label="Answer type" htmlFor="q-type" required>
-                  <SelectInput
-                    id="q-type"
-                    value={draft.type}
-                    onChange={(event) => setDraft({ ...draft, type: event.target.value as QuestionDef['type'] })}
-                  >
-                    {TYPES.map((type) => (
-                      <option key={type.value} value={type.value}>
-                        {type.label}
-                      </option>
-                    ))}
-                  </SelectInput>
-                </Field>
-
-                <Field label="Position" htmlFor="q-order" help="Lower numbers appear first.">
-                  <TextInput
-                    id="q-order"
-                    type="number"
-                    min={0}
-                    value={draft.sortOrder}
-                    onChange={(event) => setDraft({ ...draft, sortOrder: Number(event.target.value) })}
-                  />
-                </Field>
-              </div>
+              {/*
+                No position field: the arrows in the list own the order now.
+                Two mechanisms writing the same column is how a set ends up
+                with three questions all claiming to be second.
+              */}
+              <Field label="Answer type" htmlFor="q-type" required>
+                <SelectInput
+                  id="q-type"
+                  value={draft.type}
+                  onChange={(event) => setDraft({ ...draft, type: event.target.value as QuestionDef['type'] })}
+                >
+                  {TYPES.map((type) => (
+                    <option key={type.value} value={type.value}>
+                      {type.label}
+                    </option>
+                  ))}
+                </SelectInput>
+              </Field>
 
               {typeMeta?.hasOptions && (
                 <Field

@@ -31,6 +31,7 @@ import { RegistrationProgress } from '@/components/volunteer/registration-progre
 import { ShiftList } from '@/components/volunteer/shift-list'
 import { Alert, Card, CardBody, CardHeader, EmptyState, buttonClass } from '@/components/ui/primitives'
 import { requireUser } from '@/lib/auth/rbac'
+import { promoteDueAnnouncements } from '@/lib/announcements/lifecycle'
 import { db } from '@/lib/db'
 import { canVolunteerEdit, STATUS_LABELS, STATUS_TONES } from '@/lib/applications/status'
 import {
@@ -132,8 +133,13 @@ export default async function DashboardPage({
    */
   const needsConfirmation = !isDraft && (!participation || participation.confirmedAt === null)
 
+  // Tick the lazy lifecycle clock first, so a scheduled announcement whose
+  // moment has come is already PUBLISHED by the time this query runs.
+  await promoteDueAnnouncements()
   const announcements = await db.announcement.findMany({
     where: {
+      status: 'PUBLISHED',
+      showOnDashboard: true,
       publishedAt: { not: null, lte: new Date() },
       OR: [
         { audience: 'ALL_VOLUNTEERS' },
@@ -145,7 +151,8 @@ export default async function DashboardPage({
           : []),
       ],
     },
-    orderBy: { publishedAt: 'desc' },
+    // Highlighted announcements first, then newest.
+    orderBy: [{ showAsBanner: 'desc' }, { publishedAt: 'desc' }],
     take: 5,
   })
 

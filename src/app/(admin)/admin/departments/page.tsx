@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import { ClipboardList } from 'lucide-react'
 import { DepartmentRow } from '@/components/admin/department-row'
-import { buttonClass, Card, CardBody, CardHeader } from '@/components/ui/primitives'
+import { Badge, buttonClass, Card, CardBody, CardHeader } from '@/components/ui/primitives'
 import { eventConfig } from '@/config/site'
 import { can, requirePermission } from '@/lib/auth/rbac'
 import { db } from '@/lib/db'
@@ -22,7 +22,14 @@ export default async function DepartmentsPage() {
   const [rows, participationCounts] = await Promise.all([
     db.department.findMany({
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-      select: { id: true, slug: true, name: true, description: true, isActive: true },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        isActive: true,
+        sortOrder: true,
+      },
     }),
     db.editionParticipation.groupBy({
       by: ['departmentId'],
@@ -53,14 +60,20 @@ export default async function DepartmentsPage() {
         <CardHeader title="Departments" />
         <CardBody>
           <ul className="space-y-3">
-            {departments.map((department) => (
+            {departments.map((department, index) => (
               <li
                 key={department.id}
                 className="flex flex-wrap items-center justify-between gap-4 rounded-field border border-line p-4"
               >
                 <div className="min-w-0">
-                  <p className="font-display text-base font-bold uppercase text-ink">{department.name}</p>
-                  <p className="text-sm text-muted">
+                  <p className="flex flex-wrap items-center gap-2 font-display text-base font-bold uppercase text-ink">
+                    {department.name}
+                    {!department.isActive && <Badge tone="neutral">Closed</Badge>}
+                  </p>
+                  {department.description && (
+                    <p className="mt-0.5 max-w-prose text-sm text-body">{department.description}</p>
+                  )}
+                  <p className="mt-0.5 text-sm text-muted">
                     {department.applied} applied ·{' '}
                     {counts.get(department.id) ?? 0} question{(counts.get(department.id) ?? 0) === 1 ? '' : 's'}
                   </p>
@@ -68,7 +81,14 @@ export default async function DepartmentsPage() {
 
                 <div className="flex flex-wrap items-center gap-3">
                   {can(user, 'department:manage') && (
-                    <DepartmentRow departmentId={department.id} isActive={department.isActive} />
+                    <DepartmentRow
+                      departmentId={department.id}
+                      name={department.name}
+                      description={department.description}
+                      isActive={department.isActive}
+                      isFirst={index === 0}
+                      isLast={index === departments.length - 1}
+                    />
                   )}
                   <Link
                     href={`/admin/departments/${department.id}/questions`}

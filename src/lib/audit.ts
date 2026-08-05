@@ -10,36 +10,50 @@ import { clientIp } from '@/lib/auth/session'
  * entity. Writes are best-effort: an audit failure must never take down the
  * user-facing operation, but it is logged loudly to the server console.
  */
-export type AuditAction =
-  | 'auth.register'
-  | 'auth.login'
-  | 'auth.login_failed'
-  | 'auth.logout'
-  | 'auth.email_verified'
-  | 'auth.password_reset_requested'
-  | 'auth.password_reset'
-  | 'auth.password_changed'
-  | 'application.draft_saved'
-  | 'application.submitted'
-  | 'application.updated'
-  | 'application.status_changed'
-  | 'application.note_added'
-  | 'application.exported'
-  | 'application.shift_assigned'
-  | 'health.viewed'
-  | 'document.uploaded'
-  | 'document.downloaded'
-  | 'announcement.created'
-  | 'announcement.updated'
-  | 'department.updated'
-  | 'question.updated'
-  | 'reference.updated'
-  | 'testimony.moderated'
-  | 'testimony.contact_viewed'
-  | 'contact.triaged'
-  | 'settings.updated'
-  | 'user.role_changed'
-  | 'user.deletion_requested'
+/**
+ * Every action the system can record, as runtime data.
+ *
+ * An array rather than a bare union so the activity log can enumerate it —
+ * that is what lets a test prove every action has a human-readable label,
+ * instead of discovering the gap when a row renders as a raw code.
+ */
+export const AUDIT_ACTIONS = [
+  'auth.register',
+  'auth.login',
+  'auth.login_failed',
+  'auth.logout',
+  'auth.email_verified',
+  'auth.password_reset_requested',
+  'auth.password_reset',
+  'auth.password_changed',
+  'application.draft_saved',
+  'application.submitted',
+  'application.updated',
+  'application.status_changed',
+  'application.note_added',
+  'application.exported',
+  'application.shift_assigned',
+  'health.viewed',
+  'document.uploaded',
+  'document.downloaded',
+  'announcement.created',
+  'announcement.updated',
+  'announcement.published',
+  'announcement.scheduled',
+  'announcement.expired',
+  'announcement.archived',
+  'announcement.cloned',
+  /** One email run — real or test; `metadata.isTest` says which. */
+  'announcement.emailed',
+  'department.updated',
+  'question.updated',
+  'reference.updated',
+  'testimony.moderated',
+  'testimony.contact_viewed',
+  'contact.triaged',
+  'settings.updated',
+  'user.role_changed',
+  'user.deletion_requested',
 
   /*
    * Previous-edition migration.
@@ -50,17 +64,20 @@ export type AuditAction =
    * a generic "migration.updated" so the Activity Log can say what actually
    * happened without anyone having to read the metadata.
    */
-  | 'migration.batch_created'
-  | 'migration.batch_validated'
-  | 'migration.row_created'
-  | 'migration.row_matched'
-  | 'migration.import_queued'
-  | 'migration.batch_cancelled'
-  | 'migration.rows_retried'
-  | 'migration.invitations_queued'
-  | 'migration.invitations_sent'
-  | 'migration.exported'
-  | 'migration.upload_purged'
+  'migration.batch_created',
+  'migration.batch_validated',
+  'migration.row_created',
+  'migration.row_matched',
+  'migration.import_queued',
+  'migration.batch_cancelled',
+  'migration.rows_retried',
+  'migration.invitations_queued',
+  'migration.invitations_sent',
+  'migration.exported',
+  'migration.upload_purged',
+] as const
+
+export type AuditAction = (typeof AUDIT_ACTIONS)[number]
 
 export async function audit(params: {
   action: AuditAction

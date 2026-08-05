@@ -59,8 +59,13 @@ test.describe('edition confirmation', () => {
 
     /*
      * Answer the department's own questions generically — first option of each
-     * radio group. The set is admin-configured, so pinning specific keys here
+     * control. The set is admin-configured, so pinning specific keys here
      * would break the moment somebody edits a question in the admin screen.
+     *
+     * Dropdowns are answered as well as radio groups. Answering only radios
+     * passed for as long as the one conditional dropdown in the seed data
+     * happened to be retired, and failed the moment it was asked again — which
+     * is precisely the fragility the generic approach exists to avoid.
      */
     const questionSection = page.locator('section', {
       has: page.getByRole('heading', { name: /department questions/i }),
@@ -77,9 +82,24 @@ test.describe('edition confirmation', () => {
               .map((n) => n.name),
           ),
         ])
-      if (unanswered.length === 0) break
+      // Positions rather than names: the answer inputs are named
+      // `answers.<key>`, and a dot is not a valid CSS id selector.
+      const emptySelects = await questionSection
+        .locator('select')
+        .evaluateAll((nodes) =>
+          (nodes as HTMLSelectElement[])
+            .map((node, index) => (node.value ? -1 : index))
+            .filter((index) => index >= 0),
+        )
+
+      if (unanswered.length === 0 && emptySelects.length === 0) break
+
       for (const name of unanswered) {
         await questionSection.locator(`input[type="radio"][name="${name}"]`).first().check()
+      }
+      for (const index of emptySelects) {
+        // Index 1 skips the "Choose…" placeholder every select carries.
+        await questionSection.locator('select').nth(index).selectOption({ index: 1 })
       }
     }
 

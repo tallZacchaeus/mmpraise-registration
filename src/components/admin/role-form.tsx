@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { ShieldCheck } from 'lucide-react'
 import { updateUserRolesAction } from '@/app/(admin)/admin/manage-actions'
 import { Alert, Button } from '@/components/ui/primitives'
@@ -27,13 +28,30 @@ const DESCRIPTIONS: Partial<Record<Role, string>> = {
   SUPER_ADMIN: 'Unrestricted access, including user management.',
 }
 
-export function RoleForm({ departments }: { departments: { id: string; name: string }[] }) {
+/**
+ * Assign roles — blank on the administrators list, prefilled on one
+ * administrator's page, where the email is already known and is not editable.
+ */
+export function RoleForm({
+  departments,
+  initialEmail,
+  initialRoles = [],
+  initialDepartmentIds = [],
+}: {
+  departments: { id: string; name: string }[]
+  initialEmail?: string
+  initialRoles?: Role[]
+  initialDepartmentIds?: string[]
+}) {
+  const router = useRouter()
   const [pending, startTransition] = useTransition()
-  const [email, setEmail] = useState('')
-  const [roles, setRoles] = useState<Role[]>([])
-  const [departmentIds, setDepartmentIds] = useState<string[]>([])
+  const [email, setEmail] = useState(initialEmail ?? '')
+  const [roles, setRoles] = useState<Role[]>(initialRoles)
+  const [departmentIds, setDepartmentIds] = useState<string[]>(initialDepartmentIds)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [message, setMessage] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null)
+
+  const known = Boolean(initialEmail)
 
   function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -48,6 +66,7 @@ export function RoleForm({ departments }: { departments: { id: string; name: str
       }
       setErrors({})
       setMessage({ tone: 'success', text: `Roles updated for ${email}.` })
+      if (known) router.refresh()
     })
   }
 
@@ -55,21 +74,25 @@ export function RoleForm({ departments }: { departments: { id: string; name: str
     <form onSubmit={submit} className="space-y-5">
       {message && <Alert tone={message.tone}>{message.text}</Alert>}
 
-      <Field
-        label="Volunteer email address"
-        htmlFor="role-email"
-        required
-        error={errors.email}
-        help="The person must already have a volunteer account."
-      >
-        <TextInput
-          id="role-email"
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          invalid={Boolean(errors.email)}
-        />
-      </Field>
+      {known ? (
+        <input type="hidden" value={email} readOnly />
+      ) : (
+        <Field
+          label="Volunteer email address"
+          htmlFor="role-email"
+          required
+          error={errors.email}
+          help="The person must already have a volunteer account."
+        >
+          <TextInput
+            id="role-email"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            invalid={Boolean(errors.email)}
+          />
+        </Field>
+      )}
 
       <Field label="Roles" asFieldset>
         <div className="space-y-2">

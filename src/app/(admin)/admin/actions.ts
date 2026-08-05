@@ -8,6 +8,7 @@ import { env } from '@/lib/env'
 import { audit } from '@/lib/audit'
 import { can, departmentScope, requirePermission } from '@/lib/auth/rbac'
 import { fail, ok, parseOrFail, type ActionResult } from '@/lib/actions/result'
+import { announcementRecipients } from '@/lib/announcements/audience'
 import { sendMailSafely } from '@/lib/mail/mailer'
 import { announcementEmail, statusChangeEmail } from '@/lib/mail/templates'
 import { setSetting } from '@/lib/settings'
@@ -288,15 +289,49 @@ export async function removeShiftAssignmentAction(assignmentId: string): Promise
 // --- Announcements --------------------------------------------------------
 
 const announcementSchema = z.object({
+  id: z.string().optional(),
   title: trimmedText(120).pipe(z.string().min(3, 'Give the announcement a title')),
   body: multilineText(4000).pipe(z.string().min(10, 'Write the announcement')),
   audience: z.enum(['ALL_VOLUNTEERS', 'DEPARTMENT', 'APPROVED_ONLY']),
   departmentId: z.string().optional().nullable(),
-  publish: z.boolean().default(false),
-  sendEmail: z.boolean().default(false),
+  priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).default('NORMAL'),
+  showOnDashboard: z.boolean().default(true),
+  showAsBanner: z.boolean().default(false),
+  emailSubject: trimmedText(150).optional().nullable(),
+  /** `datetime-local` value, or empty for "never expires". */
+  expiresAt: z.string().optional().nullable(),
 })
 
-export async function createAnnouncementAction(input: unknown): Promise<ActionResult<{ recipients: number }>> {
+/** Parse a `datetime-local` string; '' and null both mean "no date". */
+function parseLocalDate(value: string | null | undefined): Date | null | { error: string } {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return { error: 'That date could not be read' }
+  return date
+}
+
+/** A department head may only address their own departments. */
+function checkAnnouncementScope(
+  user: Awaited<ReturnType<typeof requirePermission>>,
+  audience: string,
+  departmentId: string | null | undefined,
+): string | null {
+  const scope = departmentScope(user)
+  if (scope === null) return null
+  if (audience !== 'DEPARTMENT' || !departmentId || !scope.includes(departmentId)) {
+    return 'You can only send announcements to departments you administer'
+  }
+  return null
+}
+
+/**
+ * Create a draft, or update any editable announcement.
+ *
+ * Every update snapshots what the record said *before* the change into
+ * `AnnouncementRevision` — so version history is a list of what volunteers may
+ * actually have read, and nothing an editor overwrites is lost.
+ */
+export async function saveAnnouncementAction(input: unknown): Promise<ActionResult<{ id: string }>> {
   const user = await requirePermission('announcement:manage')
   const parsed = parseOrFail(announcementSchema, input)
   if (!parsed.ok) return parsed.result
@@ -305,77 +340,320 @@ export async function createAnnouncementAction(input: unknown): Promise<ActionRe
   if (data.audience === 'DEPARTMENT' && !data.departmentId) {
     return fail('Choose a department', { departmentId: 'Choose which department this is for' })
   }
+  const scopeError = checkAnnouncementScope(user, data.audience, data.departmentId)
+  if (scopeError) return fail(scopeError)
 
-  // A department head may only address their own departments.
-  const scope = departmentScope(user)
-  if (scope !== null) {
-    if (data.audience !== 'DEPARTMENT' || !data.departmentId || !scope.includes(data.departmentId)) {
-      return fail('You can only send announcements to departments you administer')
-    }
+  const expiresAt = parseLocalDate(data.expiresAt)
+  if (expiresAt && 'error' in expiresAt) {
+    return fail('Check the expiry date', { expiresAt: expiresAt.error })
   }
 
-  const announcement = await db.announcement.create({
-    data: {
-      title: data.title,
-      body: data.body,
-      audience: data.audience,
-      departmentId: data.audience === 'DEPARTMENT' ? data.departmentId : null,
-      publishedAt: data.publish ? new Date() : null,
-      createdById: user.id,
-    },
+  const fields = {
+    title: data.title,
+    body: data.body,
+    audience: data.audience,
+    departmentId: data.audience === 'DEPARTMENT' ? data.departmentId : null,
+    priority: data.priority,
+    showOnDashboard: data.showOnDashboard,
+    showAsBanner: data.showAsBanner,
+    emailSubject: data.emailSubject || null,
+    expiresAt,
+  }
+
+  if (!data.id) {
+    const announcement = await db.announcement.create({
+      data: { ...fields, createdById: user.id },
+    })
+    await audit({
+      action: 'announcement.created',
+      entityType: 'Announcement',
+      entityId: announcement.id,
+      actorId: user.id,
+      metadata: { audience: data.audience },
+    })
+    revalidatePath('/admin/announcements')
+    return ok({ id: announcement.id })
+  }
+
+  const existing = await db.announcement.findUnique({ where: { id: data.id } })
+  if (!existing) return fail('Announcement not found')
+  if (existing.status === 'ARCHIVED') return fail('Unarchive this announcement before editing it')
+  if (checkAnnouncementScope(user, existing.audience, existing.departmentId)) {
+    return fail('You can only edit announcements for departments you administer')
+  }
+
+  await db.$transaction(async (tx) => {
+    const versions = await tx.announcementRevision.aggregate({
+      where: { announcementId: existing.id },
+      _max: { version: true },
+    })
+    await tx.announcementRevision.create({
+      data: {
+        announcementId: existing.id,
+        version: (versions._max.version ?? 0) + 1,
+        title: existing.title,
+        body: existing.body,
+        snapshot: JSON.parse(JSON.stringify(existing)),
+        editedById: user.id,
+      },
+    })
+    await tx.announcement.update({
+      where: { id: existing.id },
+      data: { ...fields, updatedById: user.id },
+    })
   })
 
   await audit({
-    action: 'announcement.created',
+    action: 'announcement.updated',
+    entityType: 'Announcement',
+    entityId: existing.id,
+    actorId: user.id,
+  })
+  revalidatePath('/admin/announcements')
+  revalidatePath(`/admin/announcements/${existing.id}`)
+  revalidatePath('/dashboard')
+  return ok({ id: existing.id })
+}
+
+/** Load an announcement the actor is allowed to operate on, or fail. */
+async function loadScopedAnnouncement(user: Awaited<ReturnType<typeof requirePermission>>, id: string) {
+  const announcement = await db.announcement.findUnique({ where: { id } })
+  if (!announcement) return null
+  if (checkAnnouncementScope(user, announcement.audience, announcement.departmentId)) return null
+  return announcement
+}
+
+/** Send one announcement email run and record it as an `AnnouncementDelivery`. */
+async function runAnnouncementEmail(
+  announcement: { id: string; title: string; body: string; emailSubject: string | null },
+  recipients: { email: string; firstName: string | null }[],
+  triggeredById: string,
+  isTest: boolean,
+): Promise<{ succeeded: number; failed: number }> {
+  const delivery = await db.announcementDelivery.create({
+    data: {
+      announcementId: announcement.id,
+      channel: 'email',
+      isTest,
+      recipients: recipients.length,
+      triggeredById,
+    },
+  })
+
+  let succeeded = 0
+  const failures: string[] = []
+  for (const recipient of recipients) {
+    const message = announcementEmail({
+      name: recipient.firstName ?? 'there',
+      title: announcement.title,
+      body: announcement.body,
+      loginUrl: `${env.APP_URL}/dashboard`,
+    })
+    const sent = await sendMailSafely({
+      ...message,
+      ...(announcement.emailSubject ? { subject: announcement.emailSubject } : {}),
+      to: recipient.email,
+    })
+    if (sent) succeeded++
+    else failures.push(recipient.email)
+  }
+
+  await db.announcementDelivery.update({
+    where: { id: delivery.id },
+    data: {
+      succeeded,
+      failed: failures.length,
+      failures: failures.length ? failures : undefined,
+      completedAt: new Date(),
+    },
+  })
+  await audit({
+    action: 'announcement.emailed',
     entityType: 'Announcement',
     entityId: announcement.id,
+    actorId: triggeredById,
+    metadata: { isTest, recipients: recipients.length, succeeded, failed: failures.length },
+  })
+  return { succeeded, failed: failures.length }
+}
+
+/** Publish now — optionally emailing the audience in the same breath. */
+export async function publishAnnouncementAction(
+  id: string,
+  options: { sendEmail: boolean },
+): Promise<ActionResult<{ recipients: number; failed: number }>> {
+  const user = await requirePermission('announcement:manage')
+  const announcement = await loadScopedAnnouncement(user, id)
+  if (!announcement) return fail('Announcement not found')
+  if (announcement.status === 'ARCHIVED') return fail('Unarchive this announcement first')
+  if (announcement.status === 'PUBLISHED') return fail('Already published')
+  if (options.sendEmail && !can(user, 'volunteer:message')) {
+    return fail('You do not have permission to email volunteers')
+  }
+
+  await db.announcement.update({
+    where: { id },
+    data: { status: 'PUBLISHED', publishedAt: new Date(), scheduledFor: null, updatedById: user.id },
+  })
+  await audit({
+    action: 'announcement.published',
+    entityType: 'Announcement',
+    entityId: id,
     actorId: user.id,
-    metadata: { audience: data.audience, published: data.publish },
+    metadata: { sendEmail: options.sendEmail },
   })
 
   let recipients = 0
-  if (data.publish && data.sendEmail) {
-    if (!can(user, 'volunteer:message')) {
-      return fail('You do not have permission to email volunteers')
-    }
-
-    const targets = await db.volunteerApplication.findMany({
-      where: {
-        status:
-          data.audience === 'APPROVED_ONLY'
-            ? { in: ['APPROVED', 'ASSIGNED', 'CHECKED_IN'] }
-            : { not: 'DRAFT' },
-        ...(data.audience === 'DEPARTMENT' ? { departmentId: data.departmentId! } : {}),
-      },
-      select: { user: { select: { email: true, profile: { select: { firstName: true } } } } },
-    })
-
-    for (const target of targets) {
-      const message = announcementEmail({
-        name: target.user.profile?.firstName ?? 'there',
-        title: data.title,
-        body: data.body,
-        loginUrl: `${env.APP_URL}/dashboard`,
-      })
-      await sendMailSafely({ ...message, to: target.user.email })
-      recipients++
-    }
+  let failed = 0
+  if (options.sendEmail) {
+    const targets = await announcementRecipients(announcement)
+    const outcome = await runAnnouncementEmail(
+      announcement,
+      targets.map((t) => ({ email: t.user.email, firstName: t.user.profile?.firstName ?? null })),
+      user.id,
+      false,
+    )
+    recipients = targets.length
+    failed = outcome.failed
   }
 
   revalidatePath('/admin/announcements')
+  revalidatePath(`/admin/announcements/${id}`)
   revalidatePath('/dashboard')
-  return ok({ recipients })
+  return ok({ recipients, failed })
 }
 
-export async function toggleAnnouncementAction(id: string, publish: boolean): Promise<ActionResult> {
+/**
+ * Schedule for a future moment. Promotion is lazy (see
+ * `src/lib/announcements/lifecycle.ts`); email does not send for scheduled
+ * announcements until the worker pass lands, and the editor says so.
+ */
+export async function scheduleAnnouncementAction(
+  id: string,
+  scheduledFor: string,
+): Promise<ActionResult> {
   const user = await requirePermission('announcement:manage')
+  const announcement = await loadScopedAnnouncement(user, id)
+  if (!announcement) return fail('Announcement not found')
+  if (announcement.status === 'ARCHIVED') return fail('Unarchive this announcement first')
+
+  const date = parseLocalDate(scheduledFor)
+  if (!date || 'error' in date) return fail('Pick the date and time it should go live')
+  if (date.getTime() <= Date.now()) return fail('That moment has already passed — use Publish now')
+  if (announcement.expiresAt && announcement.expiresAt.getTime() <= date.getTime()) {
+    return fail('It would expire before it went live — move the expiry date first')
+  }
+
   await db.announcement.update({
     where: { id },
-    data: { publishedAt: publish ? new Date() : null },
+    data: { status: 'SCHEDULED', scheduledFor: date, updatedById: user.id },
   })
-  await audit({ action: 'announcement.updated', entityType: 'Announcement', entityId: id, actorId: user.id })
+  await audit({
+    action: 'announcement.scheduled',
+    entityType: 'Announcement',
+    entityId: id,
+    actorId: user.id,
+    metadata: { scheduledFor: date.toISOString() },
+  })
   revalidatePath('/admin/announcements')
+  revalidatePath(`/admin/announcements/${id}`)
+  return ok()
+}
+
+/** Take a live announcement down now. */
+export async function expireAnnouncementAction(id: string): Promise<ActionResult> {
+  const user = await requirePermission('announcement:manage')
+  const announcement = await loadScopedAnnouncement(user, id)
+  if (!announcement) return fail('Announcement not found')
+  if (announcement.status !== 'PUBLISHED' && announcement.status !== 'SCHEDULED') {
+    return fail('Only a published or scheduled announcement can be taken down')
+  }
+
+  await db.announcement.update({
+    where: { id },
+    data: { status: 'EXPIRED', expiresAt: new Date(), scheduledFor: null, updatedById: user.id },
+  })
+  await audit({ action: 'announcement.expired', entityType: 'Announcement', entityId: id, actorId: user.id })
+  revalidatePath('/admin/announcements')
+  revalidatePath(`/admin/announcements/${id}`)
   revalidatePath('/dashboard')
+  return ok()
+}
+
+/** Archive (or restore to draft) — archives are kept, never deleted. */
+export async function archiveAnnouncementAction(id: string, archive: boolean): Promise<ActionResult> {
+  const user = await requirePermission('announcement:manage')
+  const announcement = await loadScopedAnnouncement(user, id)
+  if (!announcement) return fail('Announcement not found')
+  if (archive && announcement.status === 'PUBLISHED') {
+    return fail('Take it down first — a live announcement cannot be archived')
+  }
+
+  await db.announcement.update({
+    where: { id },
+    data: archive
+      ? { status: 'ARCHIVED', archivedAt: new Date(), scheduledFor: null, updatedById: user.id }
+      : { status: 'DRAFT', archivedAt: null, scheduledFor: null, updatedById: user.id },
+  })
+  await audit({
+    action: archive ? 'announcement.archived' : 'announcement.updated',
+    entityType: 'Announcement',
+    entityId: id,
+    actorId: user.id,
+    metadata: { archived: archive },
+  })
+  revalidatePath('/admin/announcements')
+  revalidatePath(`/admin/announcements/${id}`)
+  return ok()
+}
+
+/** Copy everything into a fresh draft — schedules and statistics stay behind. */
+export async function cloneAnnouncementAction(id: string): Promise<ActionResult<{ id: string }>> {
+  const user = await requirePermission('announcement:manage')
+  const announcement = await loadScopedAnnouncement(user, id)
+  if (!announcement) return fail('Announcement not found')
+
+  const copy = await db.announcement.create({
+    data: {
+      title: `Copy of ${announcement.title}`.slice(0, 120),
+      body: announcement.body,
+      audience: announcement.audience,
+      departmentId: announcement.departmentId,
+      priority: announcement.priority,
+      showOnDashboard: announcement.showOnDashboard,
+      showAsBanner: announcement.showAsBanner,
+      emailSubject: announcement.emailSubject,
+      createdById: user.id,
+    },
+  })
+  await audit({
+    action: 'announcement.cloned',
+    entityType: 'Announcement',
+    entityId: copy.id,
+    actorId: user.id,
+    metadata: { clonedFrom: id },
+  })
+  revalidatePath('/admin/announcements')
+  return ok({ id: copy.id })
+}
+
+/** Email the announcement to the acting administrator alone, as a rehearsal. */
+export async function sendAnnouncementTestEmailAction(id: string): Promise<ActionResult> {
+  const user = await requirePermission('announcement:manage')
+  if (!can(user, 'volunteer:message')) {
+    return fail('You do not have permission to email volunteers')
+  }
+  const announcement = await loadScopedAnnouncement(user, id)
+  if (!announcement) return fail('Announcement not found')
+
+  const outcome = await runAnnouncementEmail(
+    announcement,
+    [{ email: user.email, firstName: user.firstName }],
+    user.id,
+    true,
+  )
+  if (outcome.failed) return fail('The test email could not be sent — check the mail configuration')
+  revalidatePath(`/admin/announcements/${id}`)
   return ok()
 }
 
@@ -413,27 +691,89 @@ export async function updateSettingsAction(input: unknown): Promise<ActionResult
 const departmentStateSchema = z.object({
   departmentId: z.string().min(1),
   isActive: z.boolean(),
+  /** Both optional so the open/close toggle can post on its own. */
+  name: trimmedText(80).pipe(z.string().min(2, 'Give the department a name')).optional(),
+  description: multilineText(500).optional().nullable(),
 })
 
 export async function updateDepartmentAction(input: unknown): Promise<ActionResult> {
   const user = await requirePermission('department:manage')
   const parsed = parseOrFail(departmentStateSchema, input)
   if (!parsed.ok) return parsed.result
+  const data = parsed.data
+
+  if (data.name) {
+    const clash = await db.department.findFirst({
+      where: { name: { equals: data.name, mode: 'insensitive' }, id: { not: data.departmentId } },
+      select: { id: true },
+    })
+    if (clash) return fail('Another department already has that name', { name: 'Already in use' })
+  }
 
   await db.department.update({
-    where: { id: parsed.data.departmentId },
-    data: { isActive: parsed.data.isActive },
+    where: { id: data.departmentId },
+    data: {
+      isActive: data.isActive,
+      ...(data.name ? { name: data.name } : {}),
+      ...(data.description !== undefined ? { description: data.description || null } : {}),
+    },
   })
 
   await audit({
     action: 'department.updated',
     entityType: 'Department',
-    entityId: parsed.data.departmentId,
+    entityId: data.departmentId,
     actorId: user.id,
-    metadata: { isActive: parsed.data.isActive },
+    metadata: { isActive: data.isActive, renamed: Boolean(data.name) },
   })
 
   revalidatePath('/admin/departments')
+  revalidatePath('/apply')
+  revalidatePath('/participate')
+  return ok()
+}
+
+/**
+ * Move a department up or down in the order volunteers see.
+ *
+ * Renumbered wholesale for the same reason questions are: the seeded set has
+ * ties, and swapping two rows that both say `0` changes nothing visible.
+ */
+export async function reorderDepartmentAction(
+  departmentId: string,
+  direction: 'up' | 'down',
+): Promise<ActionResult> {
+  const user = await requirePermission('department:manage')
+
+  const departments = await db.department.findMany({
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    select: { id: true },
+  })
+  const index = departments.findIndex((department) => department.id === departmentId)
+  const target = direction === 'up' ? index - 1 : index + 1
+  if (index === -1 || target < 0 || target >= departments.length) {
+    return fail(direction === 'up' ? 'Already first' : 'Already last')
+  }
+
+  const reordered = [...departments]
+  const [moved] = reordered.splice(index, 1)
+  reordered.splice(target, 0, moved!)
+
+  await db.$transaction(
+    reordered.map((department, position) =>
+      db.department.update({ where: { id: department.id }, data: { sortOrder: position } }),
+    ),
+  )
+
+  await audit({
+    action: 'department.updated',
+    entityType: 'Department',
+    entityId: departmentId,
+    actorId: user.id,
+    metadata: { reordered: direction, position: target },
+  })
+  revalidatePath('/admin/departments')
+  revalidatePath('/apply')
   return ok()
 }
 

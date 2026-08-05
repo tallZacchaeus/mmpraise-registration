@@ -87,10 +87,12 @@ export function Button({
 }) {
   return (
     <button
+      {...props}
       className={cn(BUTTON_BASE, BUTTON_VARIANTS[variant], variant !== 'link' && BUTTON_SIZES[size], className)}
       aria-busy={isLoading || undefined}
+      // After the spread, so a caller's `disabled={false}` cannot re-enable a
+      // button that is mid-request.
       disabled={props.disabled || isLoading}
-      {...props}
     >
       {isLoading && <Spinner className="size-4" />}
       {children}

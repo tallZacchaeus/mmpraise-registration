@@ -109,6 +109,12 @@ test.describe('contact messages helpdesk', () => {
     await page.getByRole('button', { name: /add note/i }).click()
     await expect(page.getByText(/asked the medical lead/i)).toBeVisible({ timeout: 20_000 })
 
+    /*
+     * The saved note becomes visible from the action's own response, a moment
+     * before the form clears itself. Wait for the clear — otherwise the second
+     * fill lands first and is wiped by it.
+     */
+    await expect(page.getByLabel(/add a note/i)).toHaveValue('')
     await page.getByLabel(/add a note/i).fill('Medical lead says yes — replied with the details.')
     await page.getByRole('button', { name: /add note/i }).click()
     await expect(page.getByText(/medical lead says yes/i)).toBeVisible({ timeout: 20_000 })

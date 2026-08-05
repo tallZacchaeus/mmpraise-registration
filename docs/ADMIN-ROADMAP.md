@@ -24,6 +24,11 @@ Shared rules that apply to every phase are at the bottom. Read them once.
 | **Announcement lifecycle schema** | Status, priority, scheduling, expiry, channels, revisions, delivery statistics. **Schema only — no UI** (Phase 6). |
 | **Registration IDs** | New per-edition identifiers use the *edition* year, not today's. Historical IDs untouched. |
 | **Phase 2 — import fields** | All 20 export columns mappable and auto-guessed; legacy MMP numbers and usernames honoured with safe fallbacks; age/gender/denomination translated; per-row editions; dry run of the real file: 0 errors, 12 expected warnings. |
+| **Phase 14 — Activity Log (first slice)** | 2,261 rows of raw action codes and raw JSON turned into sentences: *“superadmin exported volunteer applications — count 98”*. Three views — All activity, Security and compliance (reading personal data, changing who can do what, anything touching many records), and System events (no actor behind them). Filters for who, area, and an inclusive date range, with a Clear that actually clears. Raw action code, account, IP and metadata sit behind a *Technical details* disclosure on every row. `AuditAction` became a runtime array (`AUDIT_ACTIONS`) so a unit test can enumerate it — that test proves **every** action the system can record has a human-readable label, and that the compliance-sensitive ones are all in the security view: the two ways this feature would otherwise fail silently. 14 unit tests, 18/18 e2e. Remaining: permission-controlled export, detail links through to the related record, retention controls (blocked on the retention period). |
+| **Phase 12 — Administrators (first slice)** | Everything the permissions schema could already express now has an interface, so none of it needs SQL. Administrator list with search, role filter and access-status tabs (Everyone/Active/Suspended/Disabled), showing last sign-in and override counts. Per-administrator page with a **permission matrix** over `AdminPermissionGrant` — three states per permission (role default / always allow / never allow), each row saying both what applies now and what the role alone would give, because "allowed" and "allowed because of their role" are different facts. Suspend-until (lapses by itself, so a fortnight's leave needs no diary note), disable (does not lapse), lift and restore — none of which touch the volunteer side of the account. `RoleAssignmentHistory` now actually written: one row per role gained or lost, plus permission and access changes, shown as a timeline with who did it. Self-protection: you cannot change your own permissions, suspend yourself, or remove your own Super Administrator role (the open question, answered conservatively — another super admin can), and the last usable super administrator cannot be suspended or disabled either. 21/21 e2e including a suspended administrator signing in and finding the admin area closed but their dashboard intact. One real bug found by the mobile run and fixed: the permission table grew its grid track past the viewport (grid items default to `min-width: auto`), zooming the whole page out on a phone — `min-w-0` on the grid children. Remaining: role descriptions on the list, bulk role changes. |
+| **Phase 11 — Departments and questions (first slice)** | Departments are editable, not just switchable: name, description (shown to volunteers) and order, with accessible up/down reordering that renumbers the whole set — the seeded data has ties and gaps, so swapping two rows that both say `0` moved nothing. Same renumbering for questions, replacing the free-text position field so two mechanisms can no longer write the same column. Answer counts sit next to each question, because retiring one that 400 people answered and one nobody has were previously indistinguishable. Retired questions are listed and restorable (a conditional child cannot come back before its parent) — before this, retiring by mistake needed a database edit. Question sets can be copied from another department; copies arrive **retired** so a half-copied form never reaches a volunteer, keys already present are skipped so running it twice is harmless, and conditional links are rewritten to the copies. Live preview renders through the same `QuestionField` and the same visibility/validation engine the wizard uses. 18/18 e2e. Remaining: drag-and-drop, draft/publish gating of a whole set, import/export, answer analytics beyond counts, remaining field types. |
+| **Phase 10 — Announcements (first slice)** | The create-and-publish form replaced by a full lifecycle over the schema that landed with the permissions migration. List with status tabs (Draft/Scheduled/Published/Expired/Archived), search, pagination. Editor page separates *content* from *when it is live* — saving a wording fix can never publish. Publish dialog states the audience and today's headcount from the same query the email run uses; optional email per publish, every run recorded as an `AnnouncementDelivery` (counts + failed addresses), test email to self. Schedule/expire are a lazy clock (`promoteDueAnnouncements()` ticks whenever the list, detail or volunteer dashboard is read — no second scheduler; the worker pass is still wanted for emailing *scheduled* sends). Every edit snapshots the previous wording into `AnnouncementRevision`; version history and delivery history on the detail page. Clone, archive/restore, created-by/edited-by. Volunteer dashboard now respects status, expiry and `showOnDashboard`, and renders highlighted announcements emphasised. Fixed in passing: department-audience email targeting filtered on an application column that moved to `EditionParticipation` in Phase 1b — it typechecked (conditional spread) but threw at runtime. 21/21 new e2e including a volunteer-side dashboard check and lazy-promotion proof; full suite 372 green. Remaining: audience filters beyond the current three (multiple departments, application status, country, region — needs schema), scheduled email sends (worker pass), failed-email retry. |
+| **Phase 9 — Messages (first slice)** | The contact inbox rebuilt as a split-view helpdesk: triage list (unread weight, priority badges, spam/test/assignee marks, ageing warning past 7 days, pagination) beside a full conversation pane. Opening a message records `firstReadAt` — unread means nobody has looked. Priority (LOW→URGENT, sorted urgent-first), advisory assignment ("take this one"/"hand back"), spam and test-data tagging, and a `ContactNote` timeline replacing the single overwritable handler note (historic notes migrated in). Sender pane matches the address against volunteer accounts and shows the MMP number and application status when it finds one. Duplicate enquiries grouped by the same normalised body hash as testimonies. Replies open in the handler's own mail client (`mailto:`) until the reply-channel decision is made. Test data hidden by default; counted bulk-resolve for tagged test messages. New `contact:manage` permission and `contact.triaged` audit vocabulary. A latent `Button` bug found by the e2e run fixed: a caller-supplied `disabled` prop overrode the loading disable. 18/18 e2e (desktop/mobile/tablet); full suite 351/351. Remaining: integrated reply + templates, canned responses, analytics. |
 | **Phase 8 — Testimonies (first slice)** | Card wall replaced with a triaging table: search, status tabs, source filter with test data hidden by default, pagination. Detail page with public-rendering preview, duplicate cross-links, advisory assignment, spam/test/featured flags, and a moderation note timeline replacing the single overwritable note (historic notes migrated in). Duplicate detection is a normalised body hash — same rule in SQL backfill and app code. Contact details sit behind the new `testimony:contact_view` permission and every view is audited. Counted bulk-reject for tagged test data. `Department.capacity` dropped everywhere (schema, seed, forms) — closing Phase 0 fully. Remaining: homepage wiring for featured testimonies (homepage still renders curated content), categories/tags, spam heuristics. |
 | **Phase 7 — Applicants (first slice)** | Bulk approval: "Approve all N" scoped to the current filters, dialog restating the count, server re-count contract (refuses if the queue changed), only SUBMITTED/UNDER_REVIEW ever touched, capped at 500 per run, one status-history row and one audit record per volunteer. Export now pauses behind a dialog naming the row count and the audit trail. List gains review ageing (amber past 7 days), note counts, MMP-number column and MMP-number search. Two rendering bugs found and fixed while verifying on mobile: the dialog entry animation double-applied its centring translation, and dialog auto-focus landed in the optional note field, displacing the dialog on phones. Remaining for later slices: reviewer assignment (blocked on the advisory/exclusive decision), saved views, column visibility, detail drawer, the generic data table (extract when Phase 8 becomes its second consumer), and one tracked investigation — an intermittent mobile-emulation zoom-out on the single-row filtered page (bulk-approve e2e is skipped on the phone project only until resolved). |
 | **Phase 6 — Overview command centre** | Needs-attention queue (non-empty queues only, severity-ordered, each a link), event bar with the shared countdown at operational size, the two lifecycles reported separately (registrations vs edition participation, including "not yet confirmed"), migration and communications sections permission-gated in the query layer, weekly submission trend, distributions, humanised recent activity with routine sign-ins excluded, quick actions. 7/7 e2e including axe and 320–1920px. |
@@ -428,10 +433,13 @@ details?
 
 ---
 
-## Phase 9 — Messages helpdesk
+## Phase 9 — Messages helpdesk — **first slice DONE**
 
-**Current state.** 70 messages as repeated cards, no assignment, no pagination,
-automated test messages dominating.
+**Current state.** Split-view helpdesk (see the Completed table). Delivered:
+read state, priority, advisory assignment, spam/test tags, note timeline,
+duplicate grouping, related volunteer account, ageing indicators, counted bulk
+resolve, `mailto:` replies. Still open here: response templates, integrated
+reply, analytics — all waiting on the reply-channel decision below.
 
 **Scope.** Inbox split layout (list · detail · contact profile · timeline) ·
 search, filters, pagination · read/unread · priority · assignment · tags ·
@@ -448,58 +456,53 @@ changes the data model — decide before writing any of it.
 
 ---
 
-## Phase 10 — Announcements UI
+## Phase 10 — Announcements UI — **first slice DONE**
 
-**Current state.** The schema landed with the permissions migration — status,
-priority, scheduling, expiry, channels, revisions, delivery statistics all
-exist. **The interface is still the old create-and-publish form.**
+**Current state.** Full lifecycle UI (see the Completed table). Delivered:
+list/editor/preview, draft → scheduled → published → expired → archived,
+publish/schedule/expire with a lazy clock instead of a scheduler, test email,
+delivery statistics with failed addresses recorded, clone, version history,
+created-by and modified-by. Still open here: audience filters beyond the
+current three (needs schema), scheduled *email* sends and failed-email retry
+(both belong to the worker pass — reuse the migration queue, do not introduce
+a second scheduler).
 
-**Scope.** List · editor · preview · full lifecycle (draft, scheduled,
-published, expired, archived) · publish now / schedule / expire · audience
-filters beyond the current three (multiple departments, application status,
-country, RCCG region) · test email · delivery statistics with failed-email
-handling · clone · version history · created-by and modified-by.
-
-Scheduling and expiry need a worker pass. Reuse the migration queue — do not
-introduce a second scheduler.
-
-**Blocked on.** Sender name, sender address, reply-to.
+**Blocked on** (for the email items). Sender name, sender address, reply-to.
 
 ---
 
-## Phase 11 — Departments and questions
+## Phase 11 — Departments and questions — **first slice DONE**
 
-**Current state.** The question editor is the most developed admin screen.
-Conditional display works; questions with answers are retired, not deleted.
-Preserve both.
-
-**Scope.** Department active/inactive and descriptions · drag-and-drop ordering
-· conditional logic builder · validation rules · draft/publish so a half-edited
-set never reaches a volunteer · preview · version history · copy and duplicate ·
-import/export question sets · answer analytics · remaining field types.
+**Current state.** Editable departments, reorderable questions, retired-question
+restore, copy between departments, live preview (see the Completed table).
+Still open here: drag-and-drop (the up/down arrows are keyboard-operable and
+were the accessible choice for this slice), draft/publish gating of a whole
+set, import/export, answer analytics beyond counts, and the remaining field
+types. Conditional display and retire-not-delete were preserved throughout.
 
 **Never add.** Capacity limits, full states, automatic closure, capacity-based
 blocking. See Phase 0.
 
 ---
 
-## Phase 12 — Administrators
+## Phase 12 — Administrators — **first slice DONE**
 
-**Current state.** Roles can be assigned. The schema for granular permissions,
-suspension and assignment history exists and is enforced — but **there is no
-interface**, so granting a permission is currently a database operation.
+**Done when** — met: a super administrator can grant one reviewer the export
+permission, and suspend another until a date, without touching SQL. Both are
+covered by e2e tests.
 
-**Scope.** Administrator table with search and filters · active/disabled · last
-login · roles and department scopes · role descriptions · permission matrix
-wired to `AdminPermissionGrant` · temporary suspension via `adminSuspendedUntil`
-· assignment history from `RoleAssignmentHistory` · confirmation on sensitive
-changes · super-admin safeguards.
+**Current state.** List with search/filters, permission matrix, suspension and
+disable, assignment history (see the Completed table). Remaining: role
+descriptions shown on the list itself, and bulk role changes.
 
-**Done when.** A super administrator can grant one reviewer the export
-permission, and suspend another until a date, without touching SQL.
-
-**Blocked on.** May a super administrator remove their own last super-admin
-role?
+**The open question, answered.** *May a super administrator remove their own
+last super-admin role?* Implemented as **no** — you cannot remove your own
+Super Administrator role, change your own permissions, or suspend your own
+access; another super administrator can do any of it. The pre-existing global
+guard (never remove the last super admin) is kept, and extended to suspension
+and disabling, which could lock everyone out just as effectively. Say if you
+want self-demotion allowed instead — it is a one-line change in
+`updateUserRolesAction`.
 
 ---
 
@@ -527,24 +530,20 @@ configuration?
 
 ---
 
-## Phase 14 — Activity Log and Security Audit
+## Phase 14 — Activity Log and Security Audit — **first slice DONE**
 
-**Current state.** 2,261 entries of raw action codes and raw JSON. Technically
-complete, operationally unreadable.
+**Current state.** Three views, human-readable labels, filters and technical
+disclosure (see the Completed table). The label table lives in
+`src/lib/audit/labels.ts`; adding an action without a label is caught by a unit
+test rather than discovered in production.
 
-**Scope.** Three views: All activity · Security and compliance (restricted) ·
-System events. Human-readable labels — `Super Admin exported 98 volunteer
-applications`, not `application.exported`. Filters for actor, role, module,
-category, entity, result, date range. Search. Security-only and test-data
-filters. Pagination. Permission-controlled export. Detail drawer with links to
-the related record. Raw JSON behind a *Technical details* disclosure. Retention
+Remaining: permission-controlled export, detail links through to the related
+record, role/entity/result filters beyond the current set, and retention
 controls.
 
-The migration actions added in the last pass (`migration.batch_created`,
-`migration.import_queued`, `migration.invitations_sent`, …) are already named
-individually so they can be labelled without parsing metadata.
-
-**Blocked on.** Audit retention period.
+**Blocked on.** Audit retention period — still needed before retention controls
+can be built. Nothing is deleted today, which is the safe default in the
+meantime.
 
 ---
 

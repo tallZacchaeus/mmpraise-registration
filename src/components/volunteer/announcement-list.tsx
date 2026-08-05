@@ -15,7 +15,13 @@ import { formatDate } from '@/lib/utils'
 export function AnnouncementList({
   announcements,
 }: {
-  announcements: { id: string; title: string; body: string; publishedAt: Date | null }[]
+  announcements: {
+    id: string
+    title: string
+    body: string
+    publishedAt: Date | null
+    showAsBanner?: boolean
+  }[]
 }) {
   const published = announcements.filter(
     (a): a is typeof a & { publishedAt: Date } => a.publishedAt !== null,
@@ -34,7 +40,14 @@ export function AnnouncementList({
   return (
     <RevealStagger as="ul" selector="li" className="space-y-4" stagger={0.06} y={12}>
       {published.map((announcement) => (
-        <li key={announcement.id} className="border-b border-line pb-4 last:border-0 last:pb-0">
+        <li
+          key={announcement.id}
+          className={
+            announcement.showAsBanner
+              ? 'rounded-field border-2 border-primary bg-primary-subtle px-4 py-3'
+              : 'border-b border-line pb-4 last:border-0 last:pb-0'
+          }
+        >
           <p className="font-display font-bold uppercase text-ink">{announcement.title}</p>
           <p className="mt-0.5 text-xs text-muted">
             <span className="sr-only">Published </span>

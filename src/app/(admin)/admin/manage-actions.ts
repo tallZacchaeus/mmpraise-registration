@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { db } from '@/lib/db'
 import { audit } from '@/lib/audit'
-import { requirePermission } from '@/lib/auth/rbac'
+import { PERMISSIONS, requirePermission } from '@/lib/auth/rbac'
 import { fail, ok, parseOrFail, type ActionResult } from '@/lib/actions/result'
 import { trimmedText } from '@/lib/validation/common'
 import type { QuestionType, Role } from '@/generated/prisma/enums'
@@ -216,6 +216,202 @@ export async function deleteQuestionAction(id: string): Promise<ActionResult> {
   return ok()
 }
 
+/**
+ * Move one question up or down among its siblings.
+ *
+ * Positions are rewritten for the whole department in one transaction rather
+ * than swapping two rows: legacy sets have duplicate and gapped `sortOrder`
+ * values, and a swap between two questions that both say `0` moves nothing.
+ * Renumbering makes the order the list shows and the order the wizard renders
+ * the same thing, permanently.
+ */
+export async function reorderQuestionAction(
+  id: string,
+  direction: 'up' | 'down',
+): Promise<ActionResult> {
+  const user = await requirePermission('question:manage')
+
+  const question = await db.departmentQuestion.findUnique({
+    where: { id },
+    select: { id: true, departmentId: true },
+  })
+  if (!question) return fail('Question not found')
+
+  const siblings = await db.departmentQuestion.findMany({
+    where: { departmentId: question.departmentId, isActive: true },
+    orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    select: { id: true },
+  })
+
+  const index = siblings.findIndex((sibling) => sibling.id === id)
+  const target = direction === 'up' ? index - 1 : index + 1
+  if (index === -1 || target < 0 || target >= siblings.length) {
+    return fail(direction === 'up' ? 'Already first' : 'Already last')
+  }
+
+  const reordered = [...siblings]
+  const [moved] = reordered.splice(index, 1)
+  reordered.splice(target, 0, moved!)
+
+  await db.$transaction(
+    reordered.map((sibling, position) =>
+      db.departmentQuestion.update({ where: { id: sibling.id }, data: { sortOrder: position } }),
+    ),
+  )
+
+  await audit({
+    action: 'question.updated',
+    entityType: 'DepartmentQuestion',
+    entityId: id,
+    actorId: user.id,
+    metadata: { reordered: direction, position: target },
+  })
+  revalidatePath(`/admin/departments/${question.departmentId}/questions`)
+  return ok()
+}
+
+/**
+ * Retire a question, or bring a retired one back.
+ *
+ * Retiring is the only way an answered question ever leaves the form, so the
+ * way back has to exist too — otherwise a mis-click permanently removes a
+ * question nobody can restore without SQL.
+ */
+export async function setQuestionActiveAction(id: string, isActive: boolean): Promise<ActionResult> {
+  const user = await requirePermission('question:manage')
+
+  const question = await db.departmentQuestion.findUnique({
+    where: { id },
+    select: { id: true, departmentId: true, parentQuestionId: true },
+  })
+  if (!question) return fail('Question not found')
+
+  // A conditional question cannot come back before the question it depends on.
+  if (isActive && question.parentQuestionId) {
+    const parent = await db.departmentQuestion.findUnique({
+      where: { id: question.parentQuestionId },
+      select: { isActive: true },
+    })
+    if (!parent?.isActive) {
+      return fail('Restore the question this one depends on first')
+    }
+  }
+
+  await db.departmentQuestion.update({ where: { id }, data: { isActive } })
+  await audit({
+    action: 'question.updated',
+    entityType: 'DepartmentQuestion',
+    entityId: id,
+    actorId: user.id,
+    metadata: { retired: !isActive, restored: isActive },
+  })
+  revalidatePath(`/admin/departments/${question.departmentId}/questions`)
+  return ok()
+}
+
+/**
+ * Copy another department's active questions into this one.
+ *
+ * Keys already present here are skipped rather than overwritten — the copy is
+ * additive, so running it twice cannot duplicate or clobber anything. Copied
+ * questions arrive **retired**, so a half-copied set never reaches a volunteer
+ * mid-copy; the administrator restores the ones they want.
+ *
+ * Conditional links are rewritten to point at the copies. A question whose
+ * parent was skipped loses its condition rather than pointing across
+ * departments, which the wizard could never evaluate.
+ */
+export async function copyQuestionsAction(
+  fromDepartmentId: string,
+  toDepartmentId: string,
+): Promise<ActionResult<{ copied: number; skipped: number }>> {
+  const user = await requirePermission('question:manage')
+  if (fromDepartmentId === toDepartmentId) return fail('Choose a different department')
+
+  const [source, existing] = await Promise.all([
+    db.departmentQuestion.findMany({
+      where: { departmentId: fromDepartmentId, isActive: true },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      include: { options: { where: { isActive: true }, orderBy: { sortOrder: 'asc' } } },
+    }),
+    db.departmentQuestion.findMany({
+      where: { departmentId: toDepartmentId },
+      select: { key: true, sortOrder: true },
+    }),
+  ])
+  if (source.length === 0) return fail('That department has no questions to copy')
+
+  const taken = new Set(existing.map((question) => question.key))
+  const toCopy = source.filter((question) => !taken.has(question.key))
+  if (toCopy.length === 0) {
+    return fail('Every question from that department is already here')
+  }
+
+  let nextOrder = existing.reduce((max, question) => Math.max(max, question.sortOrder + 1), 0)
+  // Old id → new id, so conditions can be rewritten to the copies.
+  const idMap = new Map<string, string>()
+
+  await db.$transaction(async (tx) => {
+    for (const question of toCopy) {
+      const created = await tx.departmentQuestion.create({
+        data: {
+          departmentId: toDepartmentId,
+          key: question.key,
+          label: question.label,
+          helpText: question.helpText,
+          type: question.type,
+          isRequired: question.isRequired,
+          // Arrives retired — see the note above.
+          isActive: false,
+          sortOrder: nextOrder++,
+          maxLength: question.maxLength,
+          minValue: question.minValue,
+          maxValue: question.maxValue,
+          ratingMin: question.ratingMin,
+          ratingMax: question.ratingMax,
+          allowedMimeTypes: question.allowedMimeTypes,
+          maxFileSizeKb: question.maxFileSizeKb,
+          placeholder: question.placeholder,
+          pattern: question.pattern,
+          patternMessage: question.patternMessage,
+          parentOptionValues: question.parentOptionValues,
+          options: {
+            create: question.options.map((option) => ({
+              value: option.value,
+              label: option.label,
+              requiresText: option.requiresText,
+              sortOrder: option.sortOrder,
+            })),
+          },
+        },
+      })
+      idMap.set(question.id, created.id)
+    }
+
+    for (const question of toCopy) {
+      if (!question.parentQuestionId) continue
+      const newId = idMap.get(question.id)!
+      const newParentId = idMap.get(question.parentQuestionId)
+      await tx.departmentQuestion.update({
+        where: { id: newId },
+        data: newParentId
+          ? { parentQuestionId: newParentId }
+          : { parentQuestionId: null, parentOptionValues: [] },
+      })
+    }
+  })
+
+  await audit({
+    action: 'question.updated',
+    entityType: 'Department',
+    entityId: toDepartmentId,
+    actorId: user.id,
+    metadata: { copiedFrom: fromDepartmentId, copied: toCopy.length, skipped: source.length - toCopy.length },
+  })
+  revalidatePath(`/admin/departments/${toDepartmentId}/questions`)
+  return ok({ copied: toCopy.length, skipped: source.length - toCopy.length })
+}
+
 // --- Reference data -------------------------------------------------------
 
 const referenceSchema = z.object({
@@ -307,6 +503,23 @@ export async function updateUserRolesAction(input: unknown): Promise<ActionResul
     if (superCount <= 1) return fail('You cannot remove the last Super Administrator')
   }
 
+  /*
+   * Nobody demotes themselves out of the super-admin role.
+   *
+   * The global "last super administrator" guard above stops the organisation
+   * being locked out; this stops the commoner accident, where the one person
+   * who can restore a role removes it from themselves and then cannot.
+   * Another super administrator can still do it.
+   */
+  if (actor.id === target.id && wasSuper && !roles.includes('SUPER_ADMIN')) {
+    return fail('You cannot remove your own Super Administrator role — ask another one to do it')
+  }
+
+  const before = new Set<string>(
+    target.roles.map((r) => r.role).filter((r) => r !== 'VOLUNTEER'),
+  )
+  const after = new Set<string>(roles)
+
   await db.$transaction(async (tx) => {
     // VOLUNTEER is always retained: administrators can register too.
     await tx.userRole.deleteMany({ where: { userId: target.id, role: { not: 'VOLUNTEER' } } })
@@ -320,6 +533,28 @@ export async function updateUserRolesAction(input: unknown): Promise<ActionResul
         await tx.userDepartmentScope.create({ data: { userId: target.id, departmentId } })
       }
     }
+
+    /*
+     * One history row per role actually gained or lost.
+     *
+     * The table existed and nothing wrote to it, so "who made this person a
+     * reviewer, and when?" had no answer. Recording the delta rather than the
+     * whole set keeps the timeline readable a year later.
+     */
+    for (const role of after) {
+      if (!before.has(role)) {
+        await tx.roleAssignmentHistory.create({
+          data: { userId: target.id, change: 'GRANTED', subject: role, actorId: actor.id },
+        })
+      }
+    }
+    for (const role of before) {
+      if (!after.has(role)) {
+        await tx.roleAssignmentHistory.create({
+          data: { userId: target.id, change: 'REVOKED', subject: role, actorId: actor.id },
+        })
+      }
+    }
   })
 
   await audit({
@@ -331,5 +566,174 @@ export async function updateUserRolesAction(input: unknown): Promise<ActionResul
   })
 
   revalidatePath('/admin/users')
+  revalidatePath(`/admin/users/${target.id}`)
+  return ok()
+}
+
+// --- Per-administrator permissions ---------------------------------------
+
+const permissionGrantSchema = z.object({
+  userId: z.string().min(1),
+  permission: z.string().min(1),
+  /** `default` deletes the override and lets the role decide again. */
+  state: z.enum(['grant', 'revoke', 'default']),
+  reason: z.string().max(300).optional().nullable(),
+})
+
+/**
+ * Add or withdraw one permission for one administrator.
+ *
+ * This is what the `AdminPermissionGrant` table was built for and what,
+ * without an interface, had to be done in SQL: give one reviewer the export
+ * permission without inventing an "exporting reviewer" role that exists for a
+ * single person and is never maintained afterwards.
+ */
+export async function setAdminPermissionAction(input: unknown): Promise<ActionResult> {
+  const actor = await requirePermission('user:manage')
+  const parsed = parseOrFail(permissionGrantSchema, input)
+  if (!parsed.ok) return parsed.result
+  const { userId, permission, state, reason } = parsed.data
+
+  if (!(PERMISSIONS as readonly string[]).includes(permission)) {
+    return fail('That is not a permission this system knows about')
+  }
+
+  const target = await db.user.findUnique({
+    where: { id: userId },
+    select: { id: true, roles: { select: { role: true } } },
+  })
+  if (!target) return fail('Account not found')
+
+  /*
+   * Self-service permission changes are refused outright. An administrator who
+   * can widen their own permissions has, in effect, all of them.
+   */
+  if (actor.id === userId) {
+    return fail('You cannot change your own permissions — ask another administrator')
+  }
+
+  if (state === 'default') {
+    await db.adminPermissionGrant.deleteMany({ where: { userId, permission } })
+  } else {
+    const granted = state === 'grant'
+    await db.adminPermissionGrant.upsert({
+      where: { userId_permission: { userId, permission } },
+      update: { granted, reason: reason || null, grantedById: actor.id },
+      create: { userId, permission, granted, reason: reason || null, grantedById: actor.id },
+    })
+  }
+
+  await db.roleAssignmentHistory.create({
+    data: {
+      userId,
+      change: state === 'revoke' ? 'REVOKED' : 'GRANTED',
+      subject: permission,
+      reason: state === 'default' ? 'Reset to the role default' : reason || null,
+      actorId: actor.id,
+    },
+  })
+  await audit({
+    action: 'user.role_changed',
+    entityType: 'User',
+    entityId: userId,
+    actorId: actor.id,
+    metadata: { permission, state },
+  })
+
+  revalidatePath(`/admin/users/${userId}`)
+  return ok()
+}
+
+const adminAccessSchema = z.object({
+  userId: z.string().min(1),
+  action: z.enum(['suspend', 'lift', 'disable', 'enable']),
+  /** `datetime-local`, required when suspending. */
+  until: z.string().optional().nullable(),
+  reason: z.string().max(300).optional().nullable(),
+})
+
+/**
+ * Withdraw or restore administrative access.
+ *
+ * Suspension lapses on its own, which is what makes it usable for temporary
+ * cover — a fortnight's leave needs no diary note to undo. Disabling does not
+ * lapse. Neither touches the volunteer side of the account: a suspended
+ * administrator keeps their own application and dashboard.
+ */
+export async function setAdminAccessAction(input: unknown): Promise<ActionResult> {
+  const actor = await requirePermission('user:manage')
+  const parsed = parseOrFail(adminAccessSchema, input)
+  if (!parsed.ok) return parsed.result
+  const { userId, action, until, reason } = parsed.data
+
+  if (actor.id === userId) {
+    return fail('You cannot suspend or disable your own administrative access')
+  }
+
+  const target = await db.user.findUnique({
+    where: { id: userId },
+    select: { id: true, roles: { select: { role: true } } },
+  })
+  if (!target) return fail('Account not found')
+
+  // Removing the last usable super administrator locks everyone out, whether
+  // it is done by taking the role away or by suspending the person holding it.
+  const isSuper = target.roles.some((r) => r.role === 'SUPER_ADMIN')
+  if (isSuper && (action === 'suspend' || action === 'disable')) {
+    const usable = await db.user.count({
+      where: {
+        roles: { some: { role: 'SUPER_ADMIN' } },
+        adminDisabledAt: null,
+        OR: [{ adminSuspendedUntil: null }, { adminSuspendedUntil: { lte: new Date() } }],
+        id: { not: userId },
+      },
+    })
+    if (usable === 0) {
+      return fail('That would leave nobody with Super Administrator access')
+    }
+  }
+
+  let data: { adminSuspendedUntil?: Date | null; adminDisabledAt?: Date | null }
+  if (action === 'suspend') {
+    if (!until) return fail('Choose the date the suspension should end')
+    const date = new Date(until)
+    if (Number.isNaN(date.getTime())) return fail('That date could not be read')
+    if (date.getTime() <= Date.now()) return fail('Choose a date in the future')
+    data = { adminSuspendedUntil: date }
+  } else if (action === 'lift') {
+    data = { adminSuspendedUntil: null }
+  } else if (action === 'disable') {
+    data = { adminDisabledAt: new Date() }
+  } else {
+    data = { adminDisabledAt: null, adminSuspendedUntil: null }
+  }
+
+  await db.user.update({ where: { id: userId }, data })
+  await db.roleAssignmentHistory.create({
+    data: {
+      userId,
+      change: action === 'suspend' || action === 'disable' ? 'REVOKED' : 'GRANTED',
+      subject:
+        action === 'suspend'
+          ? `Administrative access suspended until ${until}`
+          : action === 'disable'
+            ? 'Administrative access disabled'
+            : action === 'lift'
+              ? 'Suspension lifted'
+              : 'Administrative access restored',
+      reason: reason || null,
+      actorId: actor.id,
+    },
+  })
+  await audit({
+    action: 'user.role_changed',
+    entityType: 'User',
+    entityId: userId,
+    actorId: actor.id,
+    metadata: { access: action, until: until ?? null },
+  })
+
+  revalidatePath('/admin/users')
+  revalidatePath(`/admin/users/${userId}`)
   return ok()
 }

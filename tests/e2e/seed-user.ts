@@ -242,6 +242,162 @@ export async function seedSubmittedVolunteer(prefix = 'subm'): Promise<SeededVol
  * duplicate detection under test is the real rule, not a copy of it.
  */
 /**
+ * A volunteer who has been given an administrative role.
+ *
+ * The suite needs somebody it can suspend, permission-tweak and demote without
+ * touching the seeded super administrator it signs in as — every one of those
+ * actions is refused on yourself, and rightly.
+ */
+export async function seedAdmin(
+  role: 'REVIEWER' | 'COMMUNICATION_OFFICER' | 'REGISTRATION_ADMIN' = 'REVIEWER',
+): Promise<SeededVolunteer & { id: string }> {
+  const volunteer = await seedVolunteer('admin')
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+
+  const client = new Client({ connectionString })
+  await client.connect()
+  try {
+    const found = await client.query('SELECT id FROM users WHERE email = $1', [volunteer.email])
+    const userId = found.rows[0].id as string
+    await client.query('INSERT INTO user_roles (id, "userId", role) VALUES ($1, $2, $3)', [
+      `ar_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+      userId,
+      role,
+    ])
+    return { ...volunteer, id: userId }
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+}
+
+/**
+ * A retired question on a department, written straight to the database.
+ *
+ * Retirement normally happens only to a question that has answers, which the
+ * suite has no clean way to produce. Seeding it directly gives the restore
+ * path something deterministic to act on, independent of what the shared
+ * seed data happens to contain.
+ */
+export async function seedRetiredQuestion(
+  departmentSlug: string,
+): Promise<{ id: string; label: string; key: string }> {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+
+  const stamp = randomUUID().replace(/-/g, '').slice(0, 10)
+  const id = `dq_${stamp}`
+  const key = `retired_${stamp}`
+  const label = `Retired question ${stamp}`
+
+  const client = new Client({ connectionString })
+  await client.connect()
+  try {
+    const department = await client.query('SELECT id FROM departments WHERE slug = $1 LIMIT 1', [
+      departmentSlug,
+    ])
+    const departmentId = department.rows[0]?.id
+    if (!departmentId) throw new Error(`No department with slug ${departmentSlug}`)
+
+    await client.query(
+      `INSERT INTO department_questions
+         (id, "departmentId", key, label, type, "isRequired", "isActive", "sortOrder", "parentOptionValues", "allowedMimeTypes")
+       VALUES ($1, $2, $3, $4, 'TEXT', false, false, 900, '{}', '{}')`,
+      [id, departmentId, key, label],
+    )
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+
+  return { id, label, key }
+}
+
+/** Remove a seeded question outright, whatever state it is in. */
+export async function deleteSeededQuestion(id: string): Promise<void> {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+
+  const client = new Client({ connectionString })
+  await client.connect()
+  try {
+    await client.query('DELETE FROM department_questions WHERE id = $1', [id])
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+}
+
+/**
+ * An announcement in an arbitrary lifecycle state, written straight to the
+ * database — for pre-states the UI cannot create, like "scheduled for a moment
+ * that has already passed".
+ */
+export async function seedAnnouncement(options: {
+  title?: string
+  body?: string
+  status?: 'DRAFT' | 'SCHEDULED' | 'PUBLISHED' | 'EXPIRED' | 'ARCHIVED'
+  /** Minutes from now; negative for the past. */
+  scheduledInMinutes?: number
+  publishedMinutesAgo?: number
+}): Promise<{ id: string; title: string }> {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+
+  const stamp = randomUUID().replace(/-/g, '').slice(0, 12)
+  const id = `an_${stamp}`
+  const title = options.title ?? `Briefing ${stamp}`
+
+  const client = new Client({ connectionString })
+  await client.connect()
+  try {
+    await client.query(
+      `INSERT INTO announcements
+         (id, title, body, audience, status,
+          "scheduledFor", "publishedAt", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, 'ALL_VOLUNTEERS', $4,
+               CASE WHEN $5::int IS NULL THEN NULL ELSE now() + ($5::int || ' minutes')::interval END,
+               CASE WHEN $6::int IS NULL THEN NULL ELSE now() - ($6::int || ' minutes')::interval END,
+               now(), now())`,
+      [
+        id,
+        title,
+        options.body ?? 'Gates open at six. Stewards gather at the north entrance at five.',
+        options.status ?? 'DRAFT',
+        options.scheduledInMinutes ?? null,
+        options.publishedMinutesAgo ?? null,
+      ],
+    )
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+
+  return { id, title }
+}
+
+/**
+ * Retire every announcement the suite seeded and left live.
+ *
+ * Announcements broadcast to every volunteer, so one left PUBLISHED would leak
+ * into the dashboard suite's "no announcements yet" empty state. Seeded ids
+ * all start `an_`; real ones are cuids and are never touched.
+ */
+export async function expireSeededAnnouncements(): Promise<void> {
+  const connectionString = process.env.DATABASE_URL
+  if (!connectionString) throw new Error('DATABASE_URL is not set')
+
+  const client = new Client({ connectionString })
+  await client.connect()
+  try {
+    await client.query(
+      `UPDATE announcements
+       SET status = 'EXPIRED', "expiresAt" = now(), "updatedAt" = now()
+       WHERE id LIKE 'an\\_%' AND status IN ('PUBLISHED', 'SCHEDULED')`,
+    )
+  } finally {
+    await client.end().catch(() => undefined)
+  }
+}
+
+/**
  * A contact message, written straight to the database.
  *
  * As with testimonies, the message hash comes from the shared module so the
