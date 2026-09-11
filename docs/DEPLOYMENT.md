@@ -182,6 +182,69 @@ WantedBy=multi-user.target
 
 ---
 
+## Push-to-deploy
+
+`.github/workflows/deploy.yml` ships `main` to the VPS. It runs the fast checks
+first — typecheck, lint, the unit **and integration** tests, and a production
+build — and only then connects over SSH and runs `scripts/deploy.sh`, which is
+the same `git pull` / `build` / `up -d` you would type by hand. A health check
+follows: if the site does not answer 200 within two minutes, the deploy fails
+loudly rather than going green over a stack that never started.
+
+Playwright is deliberately **not** a gate. It needs a seeded database, takes
+about fifteen minutes, and currently carries one intermittent failure — gating
+on it would block roughly half of all deploys for reasons unrelated to the
+change being shipped. Run it before a release that matters.
+
+The checks job starts a PostgreSQL service because the build genuinely needs a
+database: prerendering `/privacy` reads the `Setting` model, and a build without
+one dies with `DatabaseAccessDenied`. Missing rows fall back to `DEFAULTS`, so
+the database only has to be migrated, not seeded.
+
+### Repository secrets
+
+Settings → Secrets and variables → Actions:
+
+| Secret | What it is |
+|---|---|
+| `DEPLOY_HOST` | The VPS address |
+| `DEPLOY_USER` | The unprivileged owner of the deployment — `mmp` |
+| `DEPLOY_SSH_KEY` | Private half of a key generated **for this purpose only** |
+| `DEPLOY_KNOWN_HOSTS` | Output of `ssh-keyscan <host>`, so the host key is pinned |
+| `DEPLOY_PORT` | Optional, defaults to 22 |
+| `DEPLOY_PATH` | Optional, defaults to `/home/mmp/app` |
+| `HEALTHCHECK_URL` | Optional, defaults to `https://mmpraise.org` |
+
+Generate the key and pin the host:
+
+```bash
+ssh-keygen -t ed25519 -C "github-actions-deploy" -f deploy_key -N ""
+ssh-copy-id -i deploy_key.pub mmp@<host>       # public half onto the server
+ssh-keyscan <host>                             # → DEPLOY_KNOWN_HOSTS
+cat deploy_key                                 # → DEPLOY_SSH_KEY, then delete it locally
+```
+
+### Lock the key down
+
+**This matters more here than on most projects.** The VPS runs PostgreSQL
+alongside the app, so that database holds every volunteer's name, email, phone
+and church details. An unrestricted deploy key means anyone who can push to this
+repository — or anyone who compromises a GitHub Action — has a shell next to it.
+
+Restrict the key to the one command it needs. On the server, prefix its line in
+`~mmp/.ssh/authorized_keys`:
+
+```
+command="bash /home/mmp/deploy.sh",no-agent-forwarding,no-port-forwarding,no-pty,no-X11-forwarding ssh-ed25519 AAAA... github-actions-deploy
+```
+
+With a forced command the server runs its own copy of the script whatever the
+client asks for, so a stolen key can redeploy and nothing else. Copy
+`scripts/deploy.sh` to `/home/mmp/deploy.sh` and keep the two in step — or drop
+the forced command and accept that the key is a shell.
+
+---
+
 ## Migrations
 
 Always `prisma migrate deploy` in production — never `migrate dev`, which can reset data.
