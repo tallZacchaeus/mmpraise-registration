@@ -152,6 +152,10 @@ Then, immediately:
 
 ## 7. Redeploying later
 
+Pushing to `main` now does this for you — see *Push-to-deploy* in
+`docs/DEPLOYMENT.md` for the secrets to add and how to lock the deploy key down.
+By hand, or when the pipeline is unavailable:
+
 ```bash
 cd /home/mmp/app && git pull
 docker compose --env-file .env.production build

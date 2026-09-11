@@ -1,0 +1,151 @@
+name: Deploy
+
+# Push to main ships to the VPS, once the fast checks pass.
+#
+# Playwright is deliberately not a gate. It needs a seeded database and takes
+# about fifteen minutes, and it currently carries one intermittent failure — so
+# gating on it would block roughly half of all deploys for reasons unrelated to
+# the change being shipped. Run it before a release that matters, or wire it up
+# as a scheduled job once that intermittency is understood.
+
+on:
+  push:
+    branches: [main]
+  # Checks run on pull requests too, so a change is validated before it is
+  # merged rather than after. The deploy job is guarded on the branch, and
+  # `github.ref` on a pull request is refs/pull/N/merge — so a PR is checked
+  # and never shipped.
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel one half-way: an interrupted
+# `docker compose up` can leave the stack part-started.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+
+    # The build needs a real database, not just a plausible connection string:
+    # prerendering /privacy reads the Setting model, so a build without one
+    # dies with DatabaseAccessDenied. Verified by running it — an earlier
+    # version of this workflow used a dummy URL and would have failed on every
+    # push. Missing rows fall back to DEFAULTS, so migrated-and-empty is
+    # enough and there is no need to seed.
+    services:
+      postgres:
+        image: postgres:16-alpine # Matches docker-compose.yml.
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: mmp_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/mmp_ci?schema=public
+      APP_SECRET: ci-checks-only-secret-not-used-anywhere-000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # Matches the Dockerfile, so CI and production agree.
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm run lint
+
+      - name: Apply migrations
+        run: npx prisma migrate deploy
+
+      - name: Unit and integration tests
+        # With a database present the integration tests run rather than
+        # skipping themselves — and they are the ones covering health
+        # information staying out of list queries, department-head scoping, and
+        # database-level uniqueness. Skipping those silently in CI would be the
+        # worst of both worlds.
+        env:
+          TEST_DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/mmp_ci?schema=public
+        run: npx vitest run
+
+      - name: Build
+        # A compile check, not the artifact — the VPS builds its own image.
+        run: npm run build
+
+  deploy:
+    name: Deploy to VPS
+    needs: checks
+    runs-on: ubuntu-latest
+    # Only the real branch ships, even if this is dispatched from elsewhere.
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          APP_DIR: ${{ secrets.DEPLOY_PATH || '/home/mmp/app' }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # Pinned host key rather than StrictHostKeyChecking=no: accepting any
+          # key makes this deploy trivially interceptable.
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+          # Keepalives because this box is slow: `npm ci` alone takes ~24
+          # minutes inside the image build, and a whole deploy runs to 40+.
+          # A long silent stretch is exactly what an idle timeout kills, and
+          # losing the connection mid-build would leave the stack half-updated.
+          ssh -i ~/.ssh/id_deploy -p "$SSH_PORT" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=~/.ssh/known_hosts \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=240 \
+            "$SSH_USER@$SSH_HOST" \
+            "APP_DIR='$APP_DIR' bash -s" < scripts/deploy.sh
+
+      - name: Check the site came back
+        # A deploy that finishes without the site answering is a failed deploy;
+        # without this the job would go green on a stack that never started.
+        env:
+          URL: ${{ secrets.HEALTHCHECK_URL || 'https://mmpraise.org' }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL" || true)
+            if [ "$code" = "200" ]; then
+              echo "$URL responded 200 after ${attempt} attempt(s)"
+              exit 0
+            fi
+            echo "attempt ${attempt}: $URL returned ${code:-no response}"
+            sleep 10
+          done
+          echo "::error::$URL did not return 200 within two minutes of deploying"
+          exit 1
+
+      - name: Clean up the key
+        # Runners are ephemeral, but an explicit shred costs nothing and means
+        # the key is gone before any later step could read it.
+        if: always()
+        run: shred -u ~/.ssh/id_deploy 2>/dev/null || rm -f ~/.ssh/id_deploy
