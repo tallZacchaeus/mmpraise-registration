@@ -75,8 +75,11 @@ test.describe('activity log', () => {
   })
 
   test('a date range that excludes everything returns nothing, not everything', async ({ page }) => {
-    await page.getByLabel('From').fill('2019-01-01')
-    await page.getByLabel('To').fill('2019-01-02')
+    // Exact: getByLabel substring-matches, and "To" also matches the dev
+    // server's "Open Next.js Dev Tools" button, which is a strict-mode
+    // violation rather than a product fault — the overlay is dev-only.
+    await page.getByLabel('From', { exact: true }).fill('2019-01-01')
+    await page.getByLabel('To', { exact: true }).fill('2019-01-02')
     await page.getByRole('button', { name: /apply/i }).click()
 
     await expect(page.getByText(/no activity matches these filters/i)).toBeVisible({

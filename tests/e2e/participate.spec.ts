@@ -66,10 +66,19 @@ test.describe('edition confirmation', () => {
      * passed for as long as the one conditional dropdown in the seed data
      * happened to be retired, and failed the moment it was asked again — which
      * is precisely the fragility the generic approach exists to avoid.
+     *
+     * A `SELECT` question is **not** a native <select>: `QuestionField` renders
+     * it with the searchable `Combobox` (an input[role=combobox] over a
+     * ul[role=listbox]). An earlier attempt at this reached for
+     * `locator('select')`, which matches nothing on this page, so the required
+     * conditional question was silently left unanswered and the form — quite
+     * correctly — refused the submission. Drive the real control instead.
      */
-    const questionSection = page.locator('section', {
-      has: page.getByRole('heading', { name: /department questions/i }),
-    })
+    const questionSection = page
+      .locator('section', {
+        has: page.getByRole('heading', { name: /department questions/i }),
+      })
+      .first()
     /*
      * Answer-then-recount inside expect.poll: a conditional follow-up mounts
      * *asynchronously* after its parent is answered, so a fixed number of
@@ -99,22 +108,29 @@ test.describe('edition confirmation', () => {
             ])
           // Positions rather than names: the answer inputs are named
           // `answers.<key>`, and a dot is not a valid CSS id selector.
-          const emptySelects = await questionSection
-            .locator('select')
-            .evaluateAll((nodes) =>
-              (nodes as HTMLSelectElement[])
-                .map((node, index) => (node.value ? -1 : index))
-                .filter((index) => index >= 0),
-            )
+          // A combobox reads back its chosen option's label, so an empty value
+          // is an unanswered question.
+          const comboboxes = questionSection.locator('input[role="combobox"]')
+          const emptyCombos = await comboboxes.evaluateAll((nodes) =>
+            (nodes as HTMLInputElement[])
+              .map((node, index) => (node.value ? -1 : index))
+              .filter((index) => index >= 0),
+          )
 
           for (const name of unanswered) {
             await questionSection.locator(`input[type="radio"][name="${name}"]`).first().check()
           }
-          for (const index of emptySelects) {
-            // Index 1 skips the "Choose…" placeholder every select carries.
-            await questionSection.locator('select').nth(index).selectOption({ index: 1 })
+          for (const index of emptyCombos) {
+            // Focusing opens the listbox; the options carry role=option, so the
+            // first one is the generic answer without knowing the question.
+            const combobox = comboboxes.nth(index)
+            await combobox.click()
+            await questionSection.getByRole('option').first().click()
+            // The listbox closes on choose; waiting for that keeps the next
+            // pass from reading a value mid-transition.
+            await expect(combobox).toHaveAttribute('aria-expanded', 'false')
           }
-          return unanswered.length + emptySelects.length
+          return unanswered.length + emptyCombos.length
         },
         { timeout: 20_000 },
       )
