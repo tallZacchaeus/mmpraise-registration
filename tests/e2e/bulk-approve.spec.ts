@@ -111,14 +111,66 @@ test.describe('bulk approval', () => {
     await expect(dialog).toContainText(/recorded in the activity log/i)
     await expect(dialog).toContainText(/health information is never included/i)
 
-    // Both formats offered only after the pause.
-    await expect(dialog.getByRole('link', { name: /csv/i })).toHaveAttribute(
+    /*
+     * Two files, scoped by their section. Asking for "the CSV link" stopped
+     * being a single question when the contact list arrived, and a locator
+     * that silently matched either one would assert nothing.
+     */
+    const fullRecord = dialog.locator('section', {
+      has: page.getByRole('heading', { name: /full record/i }),
+    })
+    await expect(fullRecord.getByRole('link', { name: /csv/i })).toHaveAttribute(
       'href',
       /\/api\/admin\/export\?format=csv/,
     )
-    await expect(dialog.getByRole('link', { name: /excel/i })).toHaveAttribute(
+    await expect(fullRecord.getByRole('link', { name: /excel/i })).toHaveAttribute(
       'href',
       /\/api\/admin\/export\?format=xlsx/,
     )
+  })
+
+  test('offers a contact list, and is honest about what the consent covers', async ({ page }) => {
+    await page.goto(`/admin/applications?q=${encodeURIComponent(volunteer.email)}`)
+    await page.getByRole('button', { name: /^export$/i }).click()
+
+    const dialog = page.getByRole('dialog')
+    const contacts = dialog.locator('section', {
+      has: page.getByRole('heading', { name: /contact list/i }),
+    })
+
+    await expect(contacts.getByRole('link', { name: /csv/i })).toHaveAttribute(
+      'href',
+      /\/api\/admin\/export\/contacts\?format=csv/,
+    )
+
+    /*
+     * The consent this export reports is compulsory to take part, so it is
+     * evidence of agreement to service email and not a marketing opt-in.
+     * Saying so in the dialog is the difference between an administrator
+     * knowing what they may send and assuming everyone opted in.
+     */
+    await expect(contacts).toContainText(/not a marketing opt-in/i)
+  })
+
+  test('the contact list carries the segment it was opened from', async ({ page }) => {
+    // Downloading from a filtered list must return that filter's people, so a
+    // drilled-through segment is what lands in the file.
+    const query = `q=${encodeURIComponent(volunteer.email)}`
+    const response = await page.request.get(`/api/admin/export/contacts?format=csv&${query}`)
+
+    expect(response.status()).toBe(200)
+    expect(response.headers()['content-type']).toContain('text/csv')
+    expect(response.headers()['content-disposition']).toMatch(/mmpraise-contacts-\d{4}-\d{2}-\d{2}\.csv/)
+
+    const body = await response.text()
+    const [header, ...rows] = body.split('\r\n')
+    expect(header).toContain('Email')
+    expect(header).toContain('Consented to volunteer communication')
+    // The full record's church and emergency detail has no business here.
+    expect(header).not.toContain('Emergency')
+    expect(header).not.toContain('Parish')
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain(volunteer.email)
   })
 })

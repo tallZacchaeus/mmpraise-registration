@@ -253,14 +253,25 @@ export async function getOverview(user: SessionUser) {
     migration,
     comms,
     needsAttention,
+    /*
+     * Each row carries the id it was grouped by, not just a name, so the
+     * overview can link into the filtered applicant list. A bar that reports
+     * "Ushering 120" and cannot tell you *which* 120 is a dead end — the
+     * number is only useful if you can act on the people behind it.
+     *
+     * The counts match what the link lands on: both sides exclude DRAFT, and
+     * both reach department through this edition's participation.
+     */
     distributions: {
       byDepartment: byDepartment
         .map((row) => ({
+          id: row.departmentId,
           name: departments.find((d) => d.id === row.departmentId)?.name ?? 'No department yet',
           count: row._count._all,
         }))
         .sort((a, b) => b.count - a.count),
       byCountry: byCountry.map((row) => ({
+        id: row.countryId,
         name: countries.find((c) => c.id === row.countryId)?.name ?? 'Unknown',
         count: row._count._all,
       })),

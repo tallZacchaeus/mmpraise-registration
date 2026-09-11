@@ -18,7 +18,7 @@ import { eventConfig, eventEndsAt, eventStartsAt, formatEventDateTime } from '@/
 import { can, requirePermission } from '@/lib/auth/rbac'
 import { ACTIVITY_LABELS, getOverview } from '@/lib/admin/overview'
 import { AGE_RANGES } from '@/lib/validation/registration'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 
 export const metadata: Metadata = { title: 'Administration overview' }
 
@@ -340,21 +340,13 @@ export default async function AdminOverviewPage() {
             ) : (
               <ul className="space-y-3">
                 {overview.distributions.byDepartment.map((row) => (
-                  <li key={row.name}>
-                    <div className="flex items-baseline justify-between gap-4 text-sm">
-                      <span className="font-medium text-ink">{row.name}</span>
-                      <span className="tabular-nums text-muted">{row.count}</span>
-                    </div>
-                    <div
-                      className="mt-1 h-2 w-full overflow-hidden rounded-pill bg-line"
-                      role="presentation"
-                    >
-                      <div
-                        className="h-full rounded-pill bg-primary"
-                        style={{ width: `${Math.round((row.count / maxDepartment) * 100)}%` }}
-                      />
-                    </div>
-                  </li>
+                  <DistributionRow
+                    key={row.id ?? row.name}
+                    label={row.name}
+                    count={row.count}
+                    max={maxDepartment}
+                    href={row.id ? `/admin/applications?departmentId=${row.id}` : null}
+                  />
                 ))}
               </ul>
             )}
@@ -369,21 +361,14 @@ export default async function AdminOverviewPage() {
                 <li className="text-sm text-muted">No applications yet.</li>
               )}
               {overview.distributions.byCountry.map((row) => (
-                <li key={row.name}>
-                  <div className="flex items-baseline justify-between gap-4 text-sm">
-                    <span className="font-medium text-ink">{row.name}</span>
-                    <span className="tabular-nums text-muted">{row.count}</span>
-                  </div>
-                  <div
-                    className="mt-1 h-2 w-full overflow-hidden rounded-pill bg-line"
-                    role="presentation"
-                  >
-                    <div
-                      className="h-full rounded-pill bg-brand"
-                      style={{ width: `${Math.round((row.count / maxCountry) * 100)}%` }}
-                    />
-                  </div>
-                </li>
+                <DistributionRow
+                  key={row.id ?? row.name}
+                  label={row.name}
+                  count={row.count}
+                  max={maxCountry}
+                  tone="brand"
+                  href={row.id ? `/admin/applications?countryId=${row.id}` : null}
+                />
               ))}
             </ul>
           </CardBody>
@@ -396,17 +381,30 @@ export default async function AdminOverviewPage() {
               {overview.distributions.byAgeRange.length === 0 && (
                 <li className="text-sm text-muted">No applications yet.</li>
               )}
-              {overview.distributions.byAgeRange.map((row) => (
-                <li
-                  key={row.ageRange ?? 'unknown'}
-                  className="flex items-center justify-between gap-3 text-sm"
-                >
-                  <span className="text-body">
-                    {AGE_RANGES.find((a) => a.value === row.ageRange)?.label ?? 'Not given'}
-                  </span>
-                  <span className="font-semibold tabular-nums text-ink">{row.count}</span>
-                </li>
-              ))}
+              {overview.distributions.byAgeRange.map((row) => {
+                const label = AGE_RANGES.find((a) => a.value === row.ageRange)?.label ?? 'Not given'
+                const inner = (
+                  <>
+                    <span className="text-body group-hover:underline">{label}</span>
+                    <span className="font-semibold tabular-nums text-ink">{row.count}</span>
+                  </>
+                )
+                return (
+                  <li key={row.ageRange ?? 'unknown'}>
+                    {row.ageRange ? (
+                      <Link
+                        href={`/admin/applications?ageRange=${row.ageRange}`}
+                        aria-label={`${label}: ${row.count}. View these volunteers.`}
+                        className="group flex items-center justify-between gap-3 rounded-field text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                      >
+                        {inner}
+                      </Link>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3 text-sm">{inner}</div>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           </CardBody>
         </Card>
@@ -506,6 +504,59 @@ function Metric({
     <li>
       {href ? (
         <Link href={href} className="-m-1 block rounded-field p-1 hover:bg-surface-sunken">
+          {body}
+        </Link>
+      ) : (
+        body
+      )}
+    </li>
+  )
+}
+
+/**
+ * One row of a distribution: a label, a count, and a bar.
+ *
+ * The bar is decorative, so the link's accessible name carries the figure and
+ * says what following it does. When a segment cannot be expressed as a filter
+ * — "No department yet", an unknown country — it stays plain text rather than
+ * offering a link that would filter on nothing.
+ */
+function DistributionRow({
+  label,
+  count,
+  max,
+  href,
+  tone = 'primary',
+}: {
+  label: string
+  count: number
+  max: number
+  href: string | null
+  tone?: 'primary' | 'brand'
+}) {
+  const body = (
+    <>
+      <div className="flex items-baseline justify-between gap-4 text-sm">
+        <span className="font-medium text-ink group-hover:underline">{label}</span>
+        <span className="tabular-nums text-muted">{count}</span>
+      </div>
+      <div className="mt-1 h-2 w-full overflow-hidden rounded-pill bg-line" role="presentation">
+        <div
+          className={cn('h-full rounded-pill', tone === 'brand' ? 'bg-brand' : 'bg-primary')}
+          style={{ width: `${Math.round((count / max) * 100)}%` }}
+        />
+      </div>
+    </>
+  )
+
+  return (
+    <li>
+      {href ? (
+        <Link
+          href={href}
+          aria-label={`${label}: ${count}. View these volunteers.`}
+          className="group block rounded-field focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+        >
           {body}
         </Link>
       ) : (

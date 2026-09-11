@@ -65,6 +65,11 @@ const DESCRIPTORS: Partial<Record<AuditAction, Descriptor>> = {
     category: 'applications',
     security: true,
   },
+  'application.contacts_exported': {
+    label: 'downloaded a volunteer contact list',
+    category: 'applications',
+    security: true,
+  },
   'application.shift_assigned': { label: 'assigned a shift', category: 'applications' },
 
   'health.viewed': {

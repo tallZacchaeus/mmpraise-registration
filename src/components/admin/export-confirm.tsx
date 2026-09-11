@@ -37,42 +37,85 @@ export function ExportConfirm({ total, exportQuery }: { total: number; exportQue
           Export {total} application{total === 1 ? '' : 's'}?
         </DialogTitle>
         <DialogDescription asChild>
-          <div className="mt-3 space-y-3 text-sm text-body">
-            <p>
-              The file contains names, email addresses, phone numbers and church details for
-              everyone matching your current filters. Health information is never included.
-            </p>
+          <div className="mt-3 text-sm text-body">
             <p>
               This download is recorded in the activity log with your name, the filters used and
-              the row count.
+              the row count. Health information is never included in either file.
             </p>
           </div>
         </DialogDescription>
 
-        <div className="mt-6 flex flex-wrap justify-end gap-3">
+        {/*
+          Two files, because they answer different questions. Offering only the
+          full record meant anyone who wanted an address list downloaded every
+          church detail and emergency contact to get at one column.
+        */}
+        <div className="mt-5 space-y-4">
+          <section className="rounded-card border border-line p-4">
+            <h3 className="text-sm font-semibold text-ink">Full record</h3>
+            <p className="mt-1 text-sm text-body">
+              Names, contact details, church details, department and emergency contact for
+              everyone matching your filters.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-3">
+              {/*
+                Real links, so the browser downloads natively — the dialog
+                closes on click and the audited route handler does the rest.
+              */}
+              <a
+                href={`/api/admin/export?format=csv&${exportQuery}`}
+                onClick={() => setOpen(false)}
+                className={buttonClass({ variant: 'outline', size: 'sm' })}
+              >
+                <Download aria-hidden className="size-4" />
+                CSV
+              </a>
+              <a
+                href={`/api/admin/export?format=xlsx&${exportQuery}`}
+                onClick={() => setOpen(false)}
+                className={buttonClass({ variant: 'outline', size: 'sm' })}
+              >
+                <FileSpreadsheet aria-hidden className="size-4" />
+                Excel
+              </a>
+            </div>
+          </section>
+
+          <section className="rounded-card border border-line p-4">
+            <h3 className="text-sm font-semibold text-ink">Contact list</h3>
+            <p className="mt-1 text-sm text-body">
+              For writing to this segment: name, MMP number, email, phone, department and country
+              — plus whether each volunteer consented to volunteer communication and when.
+            </p>
+            <p className="mt-2 text-sm text-muted">
+              That consent is required to take part, so it covers service email and is not a
+              marketing opt-in.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <a
+                href={`/api/admin/export/contacts?format=csv&${exportQuery}`}
+                onClick={() => setOpen(false)}
+                className={buttonClass({ size: 'sm' })}
+              >
+                <Download aria-hidden className="size-4" />
+                CSV
+              </a>
+              <a
+                href={`/api/admin/export/contacts?format=xlsx&${exportQuery}`}
+                onClick={() => setOpen(false)}
+                className={buttonClass({ variant: 'outline', size: 'sm' })}
+              >
+                <FileSpreadsheet aria-hidden className="size-4" />
+                Excel
+              </a>
+            </div>
+          </section>
+        </div>
+
+        <div className="mt-6 flex justify-end">
           <DialogClose asChild>
             <Button variant="ghost">Cancel</Button>
           </DialogClose>
-          {/*
-            Real links, so the browser downloads natively — the dialog closes on
-            click and the audited route handler does the rest.
-          */}
-          <a
-            href={`/api/admin/export?format=csv&${exportQuery}`}
-            onClick={() => setOpen(false)}
-            className={buttonClass({ variant: 'outline', size: 'sm' })}
-          >
-            <Download aria-hidden className="size-4" />
-            CSV
-          </a>
-          <a
-            href={`/api/admin/export?format=xlsx&${exportQuery}`}
-            onClick={() => setOpen(false)}
-            className={buttonClass({ size: 'sm' })}
-          >
-            <FileSpreadsheet aria-hidden className="size-4" />
-            Excel
-          </a>
         </div>
       </DialogContent>
     </Dialog>

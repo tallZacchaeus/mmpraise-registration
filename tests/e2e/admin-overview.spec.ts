@@ -75,6 +75,46 @@ test.describe('admin overview', () => {
     await expect(page.getByText(/departments have no cap/i)).toBeVisible()
   })
 
+
+  /*
+   * The drill-through. A distribution bar that reports a number and cannot
+   * tell you who is behind it is a dead end, so each row links into the
+   * applicant list with that filter applied.
+   *
+   * The count is the contract: both sides exclude DRAFT and both reach
+   * department through this edition's participation, so the figure on the
+   * card must be the figure on the list. A mismatch here means the two
+   * queries have drifted apart, which is exactly the bug this asserts against.
+   */
+  test('every distribution row opens the volunteers behind it, and the count agrees', async ({
+    page,
+  }) => {
+    const rows = page.locator(
+      'a[href*="/admin/applications?departmentId="], a[href*="/admin/applications?countryId="], a[href*="/admin/applications?ageRange="]',
+    )
+    await expect(rows.first()).toBeVisible()
+
+    const first = rows.first()
+    // The bar is decorative, so the figure has to live in the accessible name.
+    const label = await first.getAttribute('aria-label')
+    expect(label).toMatch(/: \d+\. View these volunteers\./)
+    const claimed = Number(/: (\d+)\./.exec(label ?? '')?.[1])
+    expect(claimed).toBeGreaterThan(0)
+
+    await first.click()
+    await expect(page).toHaveURL(/\/admin\/applications\?/, { timeout: 30_000 })
+    await expect(page.getByText(`${claimed} application`)).toBeVisible({ timeout: 30_000 })
+  })
+
+  test('a segment with nobody in it is not offered as a link', async ({ page }) => {
+    // "No department yet" and an unknown country cannot be expressed as a
+    // filter, so they stay plain text rather than linking to nothing.
+    const deadEnds = page.getByText(/no department yet|^unknown$/i)
+    for (const text of await deadEnds.all()) {
+      await expect(text.locator('xpath=ancestor::a')).toHaveCount(0)
+    }
+  })
+
   test('has no detectable accessibility violations', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.goto('/admin', { waitUntil: 'networkidle' })

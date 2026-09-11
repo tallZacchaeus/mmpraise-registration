@@ -32,6 +32,7 @@ export const AUDIT_ACTIONS = [
   'application.status_changed',
   'application.note_added',
   'application.exported',
+  'application.contacts_exported',
   'application.shift_assigned',
   'health.viewed',
   'document.uploaded',
