@@ -17,6 +17,7 @@ import {
   PlayCircle,
   ShieldAlert,
   ShieldCheck,
+  Share2,
   Ticket,
   UserCog,
 } from 'lucide-react'
@@ -59,6 +60,7 @@ import {
   links,
   phoneHref,
 } from '@/config/site'
+import { isEnabled } from '@/config/features'
 import { getSettings } from '@/lib/settings'
 import { WIZARD_STEPS, stepByNumber } from '@/lib/validation/registration'
 import { formatDate } from '@/lib/utils'
@@ -253,6 +255,23 @@ export default async function DashboardPage({
           icon: <Download className="size-4" />,
           href: '/dashboard/summary',
         },
+    /*
+     * Offered only once they have actually confirmed. The card says "I will be
+     * attending", so putting it in front of someone who has not yet confirmed
+     * their availability would invite them to announce a commitment they have
+     * not made — and it doubles as the reward for having just made it.
+     */
+    ...(!isDraft && !needsConfirmation && isEnabled('attendingFrame')
+      ? [
+          {
+            id: 'attending-card',
+            label: 'Share that you are attending',
+            description: 'Add your photo to the event card and post it.',
+            icon: <Share2 className="size-4" />,
+            href: '/attending',
+          } satisfies ActionItem,
+        ]
+      : []),
     ...(!isDraft && canEdit
       ? [
           {

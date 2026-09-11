@@ -36,6 +36,12 @@ test.describe('edition confirmation', () => {
     await expect(actions).toHaveCount(1)
     await expect(actions.first()).toHaveAttribute('href', '/participate')
     await expect(actions.first()).toContainText(/confirm your availability/i)
+
+    /*
+     * And no invitation to announce it yet. The share card says "I will be
+     * attending", which is not yet true of someone who has not confirmed.
+     */
+    await expect(page.getByRole('link', { name: /share that you are attending/i })).toHaveCount(0)
   })
 
   test('the wizard entry point routes a registered volunteer to the short form', async ({
@@ -166,6 +172,11 @@ test.describe('edition confirmation', () => {
     // The hero no longer asks them to confirm.
     const hero = page.locator('section[aria-labelledby="dashboard-heading"]')
     await expect(hero.getByRole('link', { name: /confirm your availability/i })).toHaveCount(0)
+
+    // Now that they are going, they are offered the card to say so.
+    const share = page.getByRole('link', { name: /share that you are attending/i })
+    await expect(share).toBeVisible()
+    await expect(share).toHaveAttribute('href', '/attending')
   })
 
   test('reopening after confirming offers an update, not a re-registration', async ({ page }) => {
