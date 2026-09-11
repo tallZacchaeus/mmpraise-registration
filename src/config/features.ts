@@ -32,6 +32,7 @@ export type FeatureKey =
   | 'livestream'
   | 'shareTestimony'
   | 'newsletter'
+  | 'attendingFrame'
 
 export const features: Record<FeatureKey, boolean> = {
   // --- Live -----------------------------------------------------------------
@@ -40,6 +41,12 @@ export const features: Record<FeatureKey, boolean> = {
   /** Both live on the homepage itself and moderated before anything publishes. */
   shareTestimony: flag('NEXT_PUBLIC_FEATURE_SHARE_TESTIMONY', true),
   newsletter: flag('NEXT_PUBLIC_FEATURE_NEWSLETTER', true),
+  /**
+   * The "I will be attending" share card. Built entirely in the browser — no
+   * upload, no storage, nothing to moderate — so there is no operational
+   * reason to hold it back, but it stays a flag like every other destination.
+   */
+  attendingFrame: flag('NEXT_PUBLIC_FEATURE_ATTENDING_FRAME', true),
 
   /** Built: /about is part of this application, not the old WordPress page. */
   about: flag('NEXT_PUBLIC_FEATURE_ABOUT', true),
