@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, Check, Loader2, Lock, Mail, ShieldCheck, X } from 'lucide-react'
@@ -53,6 +53,20 @@ type UsernameState =
 export function SignUpForm() {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
+  /*
+   * Re-entrancy guard for the submit handler.
+   *
+   * `pending` disables the button, but only once React has re-rendered — and a
+   * second submit can be dispatched before that happens: a double tap on a
+   * slow phone, or Enter arriving alongside a click. When it did, the account
+   * was created by the first call and the second tripped the unique
+   * constraint, leaving the volunteer on this page being told their username
+   * was taken. Their account existed; nothing on screen said so.
+   *
+   * A ref is what closes that window, because it is set synchronously in the
+   * same tick as the event rather than on the next render.
+   */
+  const submitting = useRef(false)
   const [values, setValues] = useState<Values>(EMPTY)
   const [errors, setErrors] = useState<FieldErrors>({})
   const [formError, setFormError] = useState<string | null>(null)
@@ -125,6 +139,7 @@ export function SignUpForm() {
 
   function onSubmit(event: React.FormEvent) {
     event.preventDefault()
+    if (submitting.current) return
     setFormError(null)
 
     const parsed = signUpSchema.safeParse({ ...values, username })
@@ -139,16 +154,36 @@ export function SignUpForm() {
       return
     }
 
+    submitting.current = true
     startTransition(async () => {
-      const result = await signUpAction({ ...values, username })
-      if (!result.ok) {
-        setErrors(result.fieldErrors ?? {})
-        setFormError(result.fieldErrors ? null : result.error)
+      try {
+        const result = await signUpAction({ ...values, username })
+        if (!result.ok) {
+          // Rejected, so the volunteer must be able to correct and try again.
+          submitting.current = false
+          setErrors(result.fieldErrors ?? {})
+          setFormError(result.fieldErrors ? null : result.error)
+          document.getElementById('signup-errors')?.focus()
+          return
+        }
+        /*
+         * Deliberately still locked. The account exists and we are navigating
+         * away; releasing the guard here would reopen the window this closes,
+         * since the form stays mounted until the route change completes.
+         */
+        router.replace(result.data.redirectTo)
+        router.refresh()
+      } catch {
+        /*
+         * A network failure must not leave the form permanently unsubmittable.
+         * Handled here rather than rethrown: the message below tells the
+         * volunteer what to do, and letting it reach an error boundary would
+         * replace the page — and their typed answers — instead.
+         */
+        submitting.current = false
+        setFormError('Your account could not be created. Check your connection and try again.')
         document.getElementById('signup-errors')?.focus()
-        return
       }
-      router.replace(result.data.redirectTo)
-      router.refresh()
     })
   }
 

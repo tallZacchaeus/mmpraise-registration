@@ -258,4 +258,50 @@ test.describe('volunteer registration', () => {
 
     expect(known).toBe(unknown)
   })
+
+  test('a double submit calls the server once, not twice', async ({ page }) => {
+    /*
+     * The bug this guards against.
+     *
+     * Three separate full suite runs failed by accident in the same way: the
+     * account was created, a second submit tripped the unique constraint, and
+     * the volunteer was left on /register being told their username was taken
+     * — with no way to know their account already existed. A double tap on a
+     * slow connection is all it takes, and disabling the button does not help,
+     * because the second event can be dispatched before React re-renders.
+     *
+     * Counting the calls is what actually distinguishes fixed from broken.
+     * Asserting on the outcome does not: the unique constraint means a second
+     * call can never create a second row, so whether the page ends up in the
+     * right place depends on which response happens to land last.
+     */
+    const volunteer = newVolunteer('double')
+    await page.goto('/register')
+    await page.locator('#signup-firstName').fill(volunteer.firstName)
+    await page.locator('#signup-lastName').fill(volunteer.lastName)
+    await page.locator('#signup-email').fill(volunteer.email)
+    await page.locator('#signup-username').fill(volunteer.username)
+    await page.locator('#signup-password').fill(volunteer.password)
+    await page.locator('#signup-confirmPassword').fill(volunteer.password)
+    await page.locator('form input[type="checkbox"]').first().check()
+
+    // Let the debounced username check settle, so the only Server Action
+    // counted below is the sign-up itself.
+    await expect(page.locator('#signup-username')).toHaveValue(volunteer.username)
+    await page.waitForTimeout(1200)
+
+    let calls = 0
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.headers()['next-action']) calls += 1
+    })
+
+    await page.evaluate(() => {
+      const form = document.querySelector('form')!
+      form.requestSubmit()
+      form.requestSubmit()
+    })
+
+    await expect(page).toHaveURL(/\/apply\/personal/, { timeout: 30_000 })
+    expect(calls, 'the second submit must not reach the server').toBe(1)
+  })
 })
