@@ -201,6 +201,47 @@ database: prerendering `/privacy` reads the `Setting` model, and a build without
 one dies with `DatabaseAccessDenied`. Missing rows fall back to `DEFAULTS`, so
 the database only has to be migrated, not seeded.
 
+### The image is built in CI, not on the VPS
+
+The `image` job builds the Docker image on a GitHub runner and publishes it to
+GHCR; the VPS pulls it. Deploying is then `pull` plus `up -d` — about a minute,
+with no build load on the server.
+
+This replaced building on the box, for two reasons. It was unusably slow: `npm
+ci` alone ran to 42 minutes inside the image build and a full run passed 58
+minutes without finishing. And it could not have succeeded anyway —
+`.dockerignore` keeps every `.env` file out of the build context, so the build
+stage had no `APP_SECRET` or `DATABASE_URL` and failed at environment parsing
+before it reached the database. The Dockerfile now takes both as build
+arguments, set to throwaway values in the `build` stage only; the runtime stage
+starts from `base` again, so nothing is baked into the shipped image.
+
+Images are tagged with the commit SHA as well as `latest`, and a deploy pins
+the SHA. The box runs exactly the artefact the checks passed against, and
+rolling back is re-running an older deploy rather than hoping `latest` still
+points somewhere sensible.
+
+### Where the public configuration lives now
+
+**This is the part that changes for you.** `NEXT_PUBLIC_*` values are compiled
+into the browser bundle at build time, so whoever builds the image decides them.
+That used to be the VPS, reading `.env.production`. It is now CI — so those
+values have to exist in GitHub.
+
+Add them as repository **variables**, not secrets (Settings → Secrets and
+variables → Actions → Variables). They are not secret in any meaningful sense:
+every one of them is shipped to every visitor's browser. The full list is the
+`ARG NEXT_PUBLIC_*` block in the `Dockerfile`; copy the values from
+`.env.production`.
+
+A variable that is missing builds as an empty string — the same failure as a
+forgotten `--env-file`, and just as silent. After the first CI-built deploy,
+check the site actually shows the event date and that the launch flags are in
+the state you expect.
+
+Everything server-side — `DATABASE_URL`, `APP_SECRET`, SMTP, S3 — stays in
+`.env.production` on the VPS and never goes near GitHub.
+
 ### Repository secrets
 
 Settings → Secrets and variables → Actions:

@@ -85,13 +85,153 @@ jobs:
         # A compile check, not the artifact — the VPS builds its own image.
         run: npm run build
 
+  image:
+    name: Build and publish the image
+    needs: checks
+    # Runs on pull requests as well, building without publishing. The image
+    # build is the part most likely to break and the hardest to check by
+    # reading, so proving it before a merge is worth the few minutes.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      app: ${{ steps.meta.outputs.app }}
+      migrate: ${{ steps.meta.outputs.migrate }}
+
+    # The image build needs a reachable database, not just a connection string.
+    # `src/lib/env.ts` fails hard on a missing DATABASE_URL, and prerendering
+    # /privacy reads the Setting model — so the build container talks to this
+    # service over the host network. Missing settings fall back to DEFAULTS, so
+    # it only has to be migrated, never seeded.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: mmp_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Prepare the build-time database
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/mmp_ci?schema=public
+        run: |
+          npm ci
+          npx prisma migrate deploy
+
+      - name: Name the images
+        id: meta
+        run: |
+          # GHCR requires a lowercase path; the owner here is mixed case.
+          repo=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "app=ghcr.io/${repo}/app" >> "$GITHUB_OUTPUT"
+          echo "migrate=ghcr.io/${repo}/migrate" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: ${{ github.event_name != 'pull_request' }}
+          # host networking so the build can reach the postgres service above.
+          network: host
+          tags: |
+            ${{ steps.meta.outputs.app }}:latest
+            ${{ steps.meta.outputs.app }}:${{ github.sha }}
+          # Layer cache in the registry, so an unchanged dependency tree does
+          # not reinstall on every push.
+          cache-from: type=registry,ref=${{ steps.meta.outputs.app }}:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache,mode=max', steps.meta.outputs.app) || '' }}
+          build-args: |
+            APP_SECRET=build-time-only-never-used-at-runtime-00
+            DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/mmp_ci?schema=public
+            NEXT_PUBLIC_SITE_URL=${{ vars.NEXT_PUBLIC_SITE_URL }}
+            NEXT_PUBLIC_EVENT_EDITION=${{ vars.NEXT_PUBLIC_EVENT_EDITION }}
+            NEXT_PUBLIC_EVENT_DURATION_HOURS=${{ vars.NEXT_PUBLIC_EVENT_DURATION_HOURS }}
+            NEXT_PUBLIC_EVENT_STARTS_AT=${{ vars.NEXT_PUBLIC_EVENT_STARTS_AT }}
+            NEXT_PUBLIC_EVENT_VENUE=${{ vars.NEXT_PUBLIC_EVENT_VENUE }}
+            NEXT_PUBLIC_EVENT_VENUE_ADDRESS=${{ vars.NEXT_PUBLIC_EVENT_VENUE_ADDRESS }}
+            NEXT_PUBLIC_CONTACT_EMAIL=${{ vars.NEXT_PUBLIC_CONTACT_EMAIL }}
+            NEXT_PUBLIC_CONTACT_PHONE=${{ vars.NEXT_PUBLIC_CONTACT_PHONE }}
+            NEXT_PUBLIC_CONTACT_ADDRESS=${{ vars.NEXT_PUBLIC_CONTACT_ADDRESS }}
+            NEXT_PUBLIC_FACEBOOK_URL=${{ vars.NEXT_PUBLIC_FACEBOOK_URL }}
+            NEXT_PUBLIC_INSTAGRAM_URL=${{ vars.NEXT_PUBLIC_INSTAGRAM_URL }}
+            NEXT_PUBLIC_X_URL=${{ vars.NEXT_PUBLIC_X_URL }}
+            NEXT_PUBLIC_TIKTOK_URL=${{ vars.NEXT_PUBLIC_TIKTOK_URL }}
+            NEXT_PUBLIC_FEATURE_GIVE=${{ vars.NEXT_PUBLIC_FEATURE_GIVE }}
+            NEXT_PUBLIC_FEATURE_ABOUT=${{ vars.NEXT_PUBLIC_FEATURE_ABOUT }}
+            NEXT_PUBLIC_FEATURE_BLOG=${{ vars.NEXT_PUBLIC_FEATURE_BLOG }}
+            NEXT_PUBLIC_FEATURE_GALLERY=${{ vars.NEXT_PUBLIC_FEATURE_GALLERY }}
+            NEXT_PUBLIC_FEATURE_MAGAZINE=${{ vars.NEXT_PUBLIC_FEATURE_MAGAZINE }}
+            NEXT_PUBLIC_FEATURE_RADIO=${{ vars.NEXT_PUBLIC_FEATURE_RADIO }}
+            NEXT_PUBLIC_FEATURE_PRAYER_REQUEST=${{ vars.NEXT_PUBLIC_FEATURE_PRAYER_REQUEST }}
+            NEXT_PUBLIC_FEATURE_CONTACT=${{ vars.NEXT_PUBLIC_FEATURE_CONTACT }}
+            NEXT_PUBLIC_FEATURE_LIVESTREAM=${{ vars.NEXT_PUBLIC_FEATURE_LIVESTREAM }}
+            NEXT_PUBLIC_FEATURE_SHARE_TESTIMONY=${{ vars.NEXT_PUBLIC_FEATURE_SHARE_TESTIMONY }}
+            NEXT_PUBLIC_FEATURE_NEWSLETTER=${{ vars.NEXT_PUBLIC_FEATURE_NEWSLETTER }}
+            NEXT_PUBLIC_REGISTRATION_URL=${{ vars.NEXT_PUBLIC_REGISTRATION_URL }}
+            NEXT_PUBLIC_VOLUNTEER_URL=${{ vars.NEXT_PUBLIC_VOLUNTEER_URL }}
+            NEXT_PUBLIC_ABOUT_URL=${{ vars.NEXT_PUBLIC_ABOUT_URL }}
+            NEXT_PUBLIC_DONATION_URL=${{ vars.NEXT_PUBLIC_DONATION_URL }}
+            NEXT_PUBLIC_LIVESTREAM_URL=${{ vars.NEXT_PUBLIC_LIVESTREAM_URL }}
+            NEXT_PUBLIC_YOUTUBE_URL=${{ vars.NEXT_PUBLIC_YOUTUBE_URL }}
+            NEXT_PUBLIC_BLOG_URL=${{ vars.NEXT_PUBLIC_BLOG_URL }}
+            NEXT_PUBLIC_GALLERY_URL=${{ vars.NEXT_PUBLIC_GALLERY_URL }}
+            NEXT_PUBLIC_PRAYER_REQUEST_URL=${{ vars.NEXT_PUBLIC_PRAYER_REQUEST_URL }}
+            NEXT_PUBLIC_CONTACT_URL=${{ vars.NEXT_PUBLIC_CONTACT_URL }}
+            NEXT_PUBLIC_RADIO_URL=${{ vars.NEXT_PUBLIC_RADIO_URL }}
+            NEXT_PUBLIC_MAGAZINE_URL=${{ vars.NEXT_PUBLIC_MAGAZINE_URL }}
+            NEXT_PUBLIC_VISIT_ADDRESS=${{ vars.NEXT_PUBLIC_VISIT_ADDRESS }}
+            NEXT_PUBLIC_VISIT_MAP_URL=${{ vars.NEXT_PUBLIC_VISIT_MAP_URL }}
+
+      - name: Build and push the migrate image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: build
+          push: ${{ github.event_name != 'pull_request' }}
+          network: host
+          tags: |
+            ${{ steps.meta.outputs.migrate }}:latest
+            ${{ steps.meta.outputs.migrate }}:${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.meta.outputs.app }}:buildcache
+          build-args: |
+            APP_SECRET=build-time-only-never-used-at-runtime-00
+            DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/mmp_ci?schema=public
+
   deploy:
     name: Deploy to VPS
-    needs: checks
+    needs: [checks, image]
     runs-on: ubuntu-latest
     # Only the real branch ships, even if this is dispatched from elsewhere.
     if: github.ref == 'refs/heads/main'
     environment: production
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -103,6 +243,16 @@ jobs:
           SSH_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
           KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           APP_DIR: ${{ secrets.DEPLOY_PATH || '/home/mmp/app' }}
+          # Pinned to this commit, not :latest — the box then runs exactly the
+          # artefact these checks passed against, and a rollback is re-running
+          # an older deploy rather than hoping :latest still points somewhere
+          # sensible.
+          APP_IMAGE: ${{ needs.image.outputs.app }}:${{ github.sha }}
+          APP_IMAGE_MIGRATE: ${{ needs.image.outputs.migrate }}:${{ github.sha }}
+          # A read-only token, valid for this run only, so the VPS can pull
+          # without a long-lived registry credential sitting on it.
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -123,7 +273,7 @@ jobs:
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=240 \
             "$SSH_USER@$SSH_HOST" \
-            "APP_DIR='$APP_DIR' bash -s" < scripts/deploy.sh
+            "APP_DIR='$APP_DIR' APP_IMAGE='$APP_IMAGE' APP_IMAGE_MIGRATE='$APP_IMAGE_MIGRATE' REGISTRY_USER='$REGISTRY_USER' REGISTRY_TOKEN='$REGISTRY_TOKEN' bash -s" < scripts/deploy.sh
 
       - name: Check the site came back
         # A deploy that finishes without the site answering is a failed deploy;

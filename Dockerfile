@@ -75,6 +75,26 @@ ARG NEXT_PUBLIC_RADIO_URL
 ARG NEXT_PUBLIC_MAGAZINE_URL
 ARG NEXT_PUBLIC_VISIT_ADDRESS
 ARG NEXT_PUBLIC_VISIT_MAP_URL
+
+# Server-side values the *build* needs, which is not the same as the values the
+# running container needs.
+#
+# `src/lib/env.ts` parses the environment at module load and fails hard on a
+# missing value, and prerendering /privacy reads the Setting model — so without
+# these the build dies with "Invalid environment configuration" before it ever
+# reaches the database. `.dockerignore` keeps every .env file out of the build
+# context (correctly — secrets do not belong in an image), so they have to
+# arrive as build arguments.
+#
+# These are throwaway build-time values. They are set in the `build` stage only
+# and the runtime stage below starts from `base` again, so nothing here is
+# carried into the shipped image; the running container gets its real
+# configuration from the environment. Never pass production credentials here.
+ARG APP_SECRET
+ARG DATABASE_URL
+ENV APP_SECRET=${APP_SECRET} \
+    DATABASE_URL=${DATABASE_URL}
+
 RUN npx prisma generate && npm run build
 
 # --- Runtime -----------------------------------------------------------------
