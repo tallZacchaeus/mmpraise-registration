@@ -116,6 +116,17 @@ services:
       options: { max-size: '10m', max-file: '5' }
 
   caddy:
+    # Only for a box where this stack owns ports 80 and 443.
+    #
+    # Behind a shared reverse proxy it must not start at all: it collides on
+    # port 80 and takes the whole deploy down with it. That is not
+    # hypothetical — it happened on 2026-09-16, when the first pipeline deploy
+    # tried to start this alongside the proxy that actually fronts the site.
+    #
+    #   docker compose --profile standalone up -d
+    #
+    # brings it back for a self-contained deployment.
+    profiles: ['standalone']
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
