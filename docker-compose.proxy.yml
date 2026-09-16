@@ -1,0 +1,28 @@
+# Overlay for a box where something else already owns ports 80 and 443.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.proxy.yml ...
+#
+# On the production VPS, `mmpraise.org` is served by a shared Caddy that fronts
+# every site on the machine and proxies to `mmpraise-app:3000`. The app
+# therefore has to be reachable on that proxy's network under that exact name.
+#
+# This existed for six weeks as nothing but runtime state — someone had run
+# `docker network connect` by hand, and it was in no file anywhere. It survived
+# only because the container was never recreated. The first pipeline deploy
+# recreated it, the name stopped resolving, and the site returned 502 until the
+# command was run again by hand. Hence this file: the wiring is now declared,
+# so a deploy reproduces it instead of destroying it.
+services:
+  app:
+    networks:
+      default: {}
+      proxy:
+        aliases:
+          # The name the shared Caddyfile proxies to. Changing it breaks the
+          # site as surely as deleting the container.
+          - mmpraise-app
+
+networks:
+  proxy:
+    external: true
+    name: ${PROXY_NETWORK:?set PROXY_NETWORK in .env.production, e.g. rcawards_default}

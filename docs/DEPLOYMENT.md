@@ -221,6 +221,35 @@ the SHA. The box runs exactly the artefact the checks passed against, and
 rolling back is re-running an older deploy rather than hoping `latest` still
 points somewhere sensible.
 
+### Behind a shared reverse proxy
+
+On the production VPS this stack does **not** own ports 80 and 443. A shared
+Caddy fronts every site on the machine and proxies `mmpraise.org` to
+`mmpraise-app:3000`, so the app has to sit on that proxy's network under that
+exact name.
+
+For six weeks that wiring existed as nothing but runtime state: someone had run
+`docker network connect` by hand and it was in no file anywhere. It survived
+only because the container was never recreated. The first pipeline deploy
+recreated it, the name stopped resolving, and the site returned 502 until the
+command was run again by hand.
+
+It is now declared. Set in `.env.production`:
+
+```
+PROXY_NETWORK=rcawards_default
+```
+
+`scripts/deploy.sh` then adds `docker-compose.proxy.yml`, which attaches the app
+to that network with the `mmpraise-app` alias, and asserts afterwards that the
+attachment took — a container that is healthy but invisible to the proxy serves
+502s, and that reads as "the app is broken" when the app is fine.
+
+The stack's own `caddy` service is behind the `standalone` profile so it cannot
+start by accident and collide on port 80. For a box where this stack *does* own
+the ports, leave `PROXY_NETWORK` unset and bring it up with
+`docker compose --profile standalone up -d`.
+
 ### Where the public configuration lives now
 
 **This is the part that changes for you.** `NEXT_PUBLIC_*` values are compiled
