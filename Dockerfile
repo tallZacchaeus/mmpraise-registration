@@ -41,6 +41,13 @@ ARG NEXT_PUBLIC_SITE_URL
 ARG NEXT_PUBLIC_EVENT_EDITION
 ARG NEXT_PUBLIC_EVENT_DURATION_HOURS
 ARG NEXT_PUBLIC_EVENT_STARTS_AT
+# These three are read by src/config/site.ts but were missing from this list,
+# so they never reached the browser bundle however they were set on the host.
+# Harmless so far only because two are empty and NATIONS falls back to the same
+# value it is configured with.
+ARG NEXT_PUBLIC_EVENT_ENDS_AT
+ARG NEXT_PUBLIC_EVENT_NATIONS
+ARG NEXT_PUBLIC_EVENT_THEME
 ARG NEXT_PUBLIC_EVENT_VENUE
 ARG NEXT_PUBLIC_EVENT_VENUE_ADDRESS
 ARG NEXT_PUBLIC_CONTACT_EMAIL
