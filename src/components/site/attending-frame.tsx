@@ -27,6 +27,20 @@ const FRAME_H = 2500
 /** The transparent window in the artwork, in frame pixels. */
 const SLOT = { x: 345, y: 874, w: 1310, h: 993 }
 
+/**
+ * The cream lip below the photo — the caption strip of the polaroid.
+ *
+ * Measured from the artwork like SLOT. The name is drawn here because it is
+ * the one part of the card the design leaves empty, and because a volunteer
+ * who has not registered has nowhere else to say who they are.
+ */
+const CAPTION = { x: 332, y: 1867, w: 1335, h: 234 }
+
+/** Room to breathe at the ends of the caption strip. */
+const CAPTION_PADDING = 64
+const CAPTION_MAX_FONT = 96
+const CAPTION_MIN_FONT = 40
+
 const MIN_ZOOM = 1
 const MAX_ZOOM = 3
 /** One arrow-key press, in frame pixels. */
@@ -47,12 +61,14 @@ export function AttendingFrame() {
   const [frameReady, setFrameReady] = useState(false)
   const [hasPhoto, setHasPhoto] = useState(false)
   const [zoom, setZoom] = useState(1)
+  const [name, setName] = useState('')
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState<Status>(null)
 
   const fileId = useId()
   const zoomId = useId()
+  const nameId = useId()
 
   /*
    * Web Share with files is the mobile path that matters — a downloaded file on
@@ -158,7 +174,41 @@ export function AttendingFrame() {
     }
 
     context.drawImage(frame, 0, 0, FRAME_W, FRAME_H)
-  }, [zoom, offset])
+
+    const trimmed = name.trim()
+    if (trimmed) {
+      /*
+       * Drawn after the artwork, onto the caption strip.
+       *
+       * The family is read from the page rather than hard-coded, so the card
+       * uses the same display face as the site; a literal "Afacad" here would
+       * quietly fall back to something else the moment the font changed.
+       */
+      const display =
+        getComputedStyle(document.documentElement).getPropertyValue('--font-display').trim() ||
+        'ui-sans-serif, system-ui, sans-serif'
+
+      const available = CAPTION.w - CAPTION_PADDING * 2
+      // Shrink to fit rather than clip or overflow: a long name must still
+      // land inside the strip, and a short one should not be timid.
+      let size = CAPTION_MAX_FONT
+      context.textAlign = 'center'
+      context.textBaseline = 'middle'
+      do {
+        context.font = `600 ${size}px ${display}`
+        if (context.measureText(trimmed).width <= available) break
+        size -= 2
+      } while (size > CAPTION_MIN_FONT)
+
+      context.fillStyle = '#3d1f0a'
+      context.fillText(
+        trimmed,
+        CAPTION.x + CAPTION.w / 2,
+        CAPTION.y + CAPTION.h / 2,
+        available,
+      )
+    }
+  }, [zoom, offset, name])
 
   useEffect(() => {
     render()
@@ -349,8 +399,29 @@ export function AttendingFrame() {
         </div>
 
         <div>
+          <label htmlFor={nameId} className="mb-1 block text-sm font-semibold text-ink">
+            2. Your name <span className="font-normal text-muted">(optional)</span>
+          </label>
+          <p className="mb-2 text-sm text-muted">
+            Printed along the bottom of the card.
+          </p>
+          <input
+            id={nameId}
+            type="text"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            // Long enough for a full name, short enough that the strip stays
+            // legible once the text has been shrunk to fit.
+            maxLength={40}
+            autoComplete="name"
+            placeholder="e.g. Adebayo O."
+            className="min-h-11 w-full rounded-field border border-line-strong bg-surface px-3 py-2 text-base text-body placeholder:text-muted/70"
+          />
+        </div>
+
+        <div>
           <label htmlFor={zoomId} className="mb-1 block text-sm font-semibold text-ink">
-            2. Zoom
+            3. Zoom
           </label>
           <input
             id={zoomId}
