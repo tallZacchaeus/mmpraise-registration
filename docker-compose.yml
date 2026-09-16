@@ -25,6 +25,11 @@ services:
   # Seed the database once, after the first deploy:
   #   docker compose --env-file .env.production run --rm migrate npx tsx prisma/seed.ts
   migrate:
+    # Pulled, not built, when APP_IMAGE_MIGRATE is set — which is what the
+    # deploy pipeline does. The `build:` block stays so a build on the box is
+    # still possible, but it is the fallback now, not the normal path: this VPS
+    # takes the better part of an hour to build and CI takes two minutes.
+    image: ${APP_IMAGE_MIGRATE:-mmpraise-migrate:local}
     build:
       context: .
       target: build
@@ -36,6 +41,7 @@ services:
         condition: service_healthy
 
   app:
+    image: ${APP_IMAGE:-mmpraise-app:local}
     build:
       context: .
       # NEXT_PUBLIC_* values are compiled into the browser bundle, so they must
