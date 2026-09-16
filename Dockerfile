@@ -90,10 +90,11 @@ ARG NEXT_PUBLIC_VISIT_MAP_URL
 # and the runtime stage below starts from `base` again, so nothing here is
 # carried into the shipped image; the running container gets its real
 # configuration from the environment. Never pass production credentials here.
+# No matching ENV: an ARG in scope is already exported into RUN, which is how
+# the thirty-eight NEXT_PUBLIC_* arguments above reach the bundle. Adding ENV
+# would only widen the scope and trip BuildKit's SecretsUsedInArgOrEnv warning.
 ARG APP_SECRET
 ARG DATABASE_URL
-ENV APP_SECRET=${APP_SECRET} \
-    DATABASE_URL=${DATABASE_URL}
 
 RUN npx prisma generate && npm run build
 
