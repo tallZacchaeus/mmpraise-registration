@@ -17,6 +17,10 @@ import { expect, test } from '@playwright/test'
 /** Measured from `public/landing/ugc/frame.png`. Keep in step with the component. */
 const SLOT = { x: 345, y: 874, w: 1310, h: 993 }
 
+/** The cream caption strip below the photo, where the name is printed. */
+const CAPTION = { x: 332, y: 1867, w: 1335, h: 234 }
+const CAPTION_PADDING = 64
+
 /**
  * Put a known image into the file input the way a person picking a file does.
  * Yellow top-left and magenta bottom-right corners make cropping observable.
@@ -93,6 +97,35 @@ function windowSignature(page: import('@playwright/test').Page) {
       return hash
     },
     [SLOT.x, SLOT.y + Math.floor(SLOT.h / 2), SLOT.w],
+  )
+}
+
+
+/**
+ * Where the dark pixels sit inside the caption strip.
+ *
+ * Returns null when the strip is untouched. Insets are measured from the edges
+ * of the strip, which is what makes "does a long name overflow?" answerable.
+ */
+function captionInk(page: import('@playwright/test').Page) {
+  return page.evaluate(
+    ([x, y, w, h]) => {
+      const canvas = document.querySelector('canvas')!
+      const data = canvas.getContext('2d')!.getImageData(x, y, w, h).data
+      let min = Infinity
+      let max = -1
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          const i = (row * w + col) * 4
+          if (data[i] < 200 && data[i + 1] < 200) {
+            if (col < min) min = col
+            if (col > max) max = col
+          }
+        }
+      }
+      return max < 0 ? null : { leftInset: min, rightInset: w - 1 - max, width: max - min + 1 }
+    },
+    [CAPTION.x, CAPTION.y, CAPTION.w, CAPTION.h],
   )
 }
 
@@ -199,6 +232,54 @@ test.describe('attending card', () => {
      */
     await page.keyboard.press('ArrowLeft')
     await expect.poll(() => windowSignature(page), { timeout: 10_000 }).not.toBe(atStop)
+  })
+
+
+  test('prints a name on the card for someone who has not registered', async ({ page }) => {
+    /*
+     * The card is shared by people who have no account and no MMP number, so
+     * the caption strip is the only place they can say who they are. It is
+     * also the one part of the artwork the design leaves empty.
+     */
+    await choosePhoto(page)
+    // Polled, not read once: the first paint of this route can lag the "photo
+    // added" message, and reading the canvas the instant it appears made this
+    // fail on a cold compile.
+    await expect.poll(() => captionInk(page), { timeout: 10_000 }).toBeNull()
+
+    await page.getByLabel(/your name/i).fill('Adebayo Oluwaseun')
+
+    await expect.poll(() => captionInk(page), { timeout: 10_000 }).not.toBeNull()
+  })
+
+  test('a long name shrinks to fit rather than running off the card', async ({ page }) => {
+    await choosePhoto(page)
+
+    await page.getByLabel(/your name/i).fill('Ada')
+    await expect.poll(() => captionInk(page), { timeout: 10_000 }).not.toBeNull()
+    const short = (await captionInk(page))!
+
+    await page.getByLabel(/your name/i).fill('Oluwaseun Adebayo-Chukwuemeka Ibrahim')
+    await expect.poll(async () => (await captionInk(page))!.width, { timeout: 10_000 }).toBeGreaterThan(
+      short.width,
+    )
+
+    const long = (await captionInk(page))!
+    // Still inside the padding at both ends, so it never touches the edge.
+    // A few pixels of tolerance for antialiasing on the outermost glyph.
+    expect(long.leftInset).toBeGreaterThanOrEqual(CAPTION_PADDING - 8)
+    expect(long.rightInset).toBeGreaterThanOrEqual(CAPTION_PADDING - 8)
+    // And centred: the two insets should agree closely.
+    expect(Math.abs(long.leftInset - long.rightInset)).toBeLessThan(12)
+  })
+
+  test('clearing the name leaves the strip clean', async ({ page }) => {
+    await choosePhoto(page)
+    await page.getByLabel(/your name/i).fill('Temporary')
+    await expect.poll(() => captionInk(page), { timeout: 10_000 }).not.toBeNull()
+
+    await page.getByLabel(/your name/i).fill('')
+    await expect.poll(() => captionInk(page), { timeout: 10_000 }).toBeNull()
   })
 
   test('has no detectable accessibility violations', async ({ page }) => {
