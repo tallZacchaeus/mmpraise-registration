@@ -33,10 +33,22 @@ export function ApplicationFilters({
   departments,
   countries,
   regions,
+  states,
+  provinces,
 }: {
   departments: Option[]
   countries: Option[]
   regions: Option[]
+  /*
+   * Cascading, and empty until their parent is chosen.
+   *
+   * There are thousands of states and hundreds of provinces across every
+   * country and region; listing them all would be a scroll, not a filter.
+   * Both are fetched on the server for the chosen parent, so the dropdown only
+   * ever offers values that can actually return rows.
+   */
+  states: Option[]
+  provinces: Option[]
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -52,7 +64,9 @@ export function ApplicationFilters({
       status: searchParams.get('status') ?? 'all',
       departmentId: searchParams.get('departmentId') ?? 'all',
       countryId: searchParams.get('countryId') ?? 'all',
+      stateId: searchParams.get('stateId') ?? 'all',
       churchRegionId: searchParams.get('churchRegionId') ?? 'all',
+      churchProvinceId: searchParams.get('churchProvinceId') ?? 'all',
       ageRange: searchParams.get('ageRange') ?? 'all',
     }),
     [searchParams],
@@ -132,7 +146,14 @@ export function ApplicationFilters({
           ))}
         </Filter>
 
-        <Filter label="Country" id="filter-country" value={current.countryId} onChange={(v) => apply({ countryId: v })}>
+        <Filter
+          label="Country"
+          id="filter-country"
+          value={current.countryId}
+          // Clearing the child matters: a state from the previous country
+          // would filter to nothing and look like an empty result set.
+          onChange={(v) => apply({ countryId: v, stateId: 'all' })}
+        >
           <option value="all">All countries</option>
           {countries.map((country) => (
             <option key={country.id} value={country.id}>
@@ -141,11 +162,28 @@ export function ApplicationFilters({
           ))}
         </Filter>
 
+        {/* Only offered once a country narrows it to a usable list. */}
+        {states.length > 0 && (
+          <Filter
+            label="State/Province"
+            id="filter-state"
+            value={current.stateId}
+            onChange={(v) => apply({ stateId: v })}
+          >
+            <option value="all">All states</option>
+            {states.map((state) => (
+              <option key={state.id} value={state.id}>
+                {state.name}
+              </option>
+            ))}
+          </Filter>
+        )}
+
         <Filter
           label="RCCG region"
           id="filter-region"
           value={current.churchRegionId}
-          onChange={(v) => apply({ churchRegionId: v })}
+          onChange={(v) => apply({ churchRegionId: v, churchProvinceId: 'all' })}
         >
           <option value="all">All regions</option>
           {regions.map((region) => (
@@ -154,6 +192,23 @@ export function ApplicationFilters({
             </option>
           ))}
         </Filter>
+
+        {/* Same rule as State: only once a region narrows it. */}
+        {provinces.length > 0 && (
+          <Filter
+            label="RCCG province"
+            id="filter-province"
+            value={current.churchProvinceId}
+            onChange={(v) => apply({ churchProvinceId: v })}
+          >
+            <option value="all">All provinces</option>
+            {provinces.map((province) => (
+              <option key={province.id} value={province.id}>
+                {province.name}
+              </option>
+            ))}
+          </Filter>
+        )}
 
         <Filter label="Age range" id="filter-age" value={current.ageRange} onChange={(v) => apply({ ageRange: v })}>
           <option value="all">All ages</option>
