@@ -129,6 +129,38 @@ test.describe('bulk approval', () => {
     )
   })
 
+  test('the cascading filters appear only once their parent narrows them', async ({ page }) => {
+    /*
+     * State and RCCG province are only useful once a country or region is
+     * chosen — there are thousands of states across every country, and a
+     * dropdown of all of them is a scroll, not a filter.
+     */
+    await page.goto('/admin/applications')
+    await expect(page.getByLabel('State/Province')).toHaveCount(0)
+    await expect(page.getByLabel('RCCG province')).toHaveCount(0)
+
+    const country = page.getByLabel('Country')
+    await country.selectOption({ index: 1 })
+    await expect(page.getByLabel('State/Province')).toBeVisible({ timeout: 20_000 })
+
+    const region = page.getByLabel('RCCG region')
+    await region.selectOption({ index: 1 })
+    await expect(page.getByLabel('RCCG province')).toBeVisible({ timeout: 20_000 })
+  })
+
+  test('changing country clears a state that belonged to the old one', async ({ page }) => {
+    // Otherwise the stale state filters to nothing, and an empty table looks
+    // like "nobody matches" rather than "these two filters contradict".
+    await page.goto('/admin/applications')
+    await page.getByLabel('Country').selectOption({ index: 1 })
+    await expect(page.getByLabel('State/Province')).toBeVisible({ timeout: 20_000 })
+    await page.getByLabel('State/Province').selectOption({ index: 1 })
+    await expect(page).toHaveURL(/stateId=/, { timeout: 20_000 })
+
+    await page.getByLabel('Country').selectOption({ index: 2 })
+    await expect(page).not.toHaveURL(/stateId=/, { timeout: 20_000 })
+  })
+
   test('offers a contact list, and is honest about what the consent covers', async ({ page }) => {
     await page.goto(`/admin/applications?q=${encodeURIComponent(volunteer.email)}`)
     await page.getByRole('button', { name: /^export$/i }).click()

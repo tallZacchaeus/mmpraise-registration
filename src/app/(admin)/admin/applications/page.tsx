@@ -7,7 +7,13 @@ import { Badge, buttonClass, Card, CardBody, EmptyState } from '@/components/ui/
 import { can, requirePermission } from '@/lib/auth/rbac'
 import { countReviewable, listApplications, type ApplicationFilters as Filters } from '@/lib/admin/queries'
 import { STATUS_LABELS, STATUS_TONES } from '@/lib/applications/status'
-import { getChurchRegions, getCountries, getDepartments } from '@/lib/reference'
+import {
+  getChurchProvinces,
+  getChurchRegions,
+  getCountries,
+  getDepartments,
+  getStates,
+} from '@/lib/reference'
 import { formatDate, initials } from '@/lib/utils'
 import { AGE_RANGES } from '@/lib/validation/registration'
 
@@ -26,19 +32,26 @@ export default async function ApplicationsPage({
     status: params.status,
     departmentId: params.departmentId,
     countryId: params.countryId,
+    stateId: params.stateId,
     churchRegionId: params.churchRegionId,
+    churchProvinceId: params.churchProvinceId,
     ageRange: params.ageRange,
     page: params.page ? Number(params.page) : 1,
     sort: (params.sort as Filters['sort']) ?? 'newest',
   }
 
-  const [result, reviewable, departments, countries, regions] = await Promise.all([
-    listApplications(user, filters),
-    can(user, 'application:decide') ? countReviewable(user, filters) : Promise.resolve(0),
-    getDepartments(),
-    getCountries(),
-    getChurchRegions(),
-  ])
+  const [result, reviewable, departments, countries, regions, states, provinces] =
+    await Promise.all([
+      listApplications(user, filters),
+      can(user, 'application:decide') ? countReviewable(user, filters) : Promise.resolve(0),
+      getDepartments(),
+      getCountries(),
+      getChurchRegions(),
+      // Fetched only for the chosen parent: the full lists are thousands of
+      // rows, and a dropdown of every state on earth is not a filter.
+      params.countryId ? getStates(params.countryId) : Promise.resolve([]),
+      params.churchRegionId ? getChurchProvinces(params.churchRegionId) : Promise.resolve([]),
+    ])
 
   // Read once for the whole page, so the compiler's purity rule holds and
   // every row ages against the same instant.
@@ -72,6 +85,8 @@ export default async function ApplicationsPage({
         departments={departments.map((d) => ({ id: d.id, name: d.name }))}
         countries={countries.map((c) => ({ id: c.id, name: c.name }))}
         regions={regions}
+        states={states}
+        provinces={provinces}
       />
 
       {result.items.length === 0 ? (
